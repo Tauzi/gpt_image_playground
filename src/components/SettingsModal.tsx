@@ -22,6 +22,8 @@ import {
   isAgentTextApiProfile,
   isOpenAICompatibleProvider,
   mergeImportedSettings,
+  MIANYUN_ASYNC_PROVIDER_ID,
+  MIANYUN_SYNC_PROVIDER_ID,
   normalizeAgentMaxToolRounds,
   normalizeCustomProviderDefinition,
   normalizeSettings,
@@ -206,12 +208,22 @@ function isAsyncCustomProvider(provider: CustomProviderDefinition | null | undef
 }
 
 function getImageGenerationModeProfile(settings: AppSettings, mode: ImageGenerationMode) {
+  const providerId = mode === 'async' ? MIANYUN_ASYNC_PROVIDER_ID : MIANYUN_SYNC_PROVIDER_ID
+  const exactProfile = settings.profiles.find((profile) => profile.provider === providerId)
+  if (exactProfile) return exactProfile
   const customProfile = settings.profiles.find((profile) => {
     const provider = settings.customProviders.find((item) => item.id === profile.provider)
     return provider && isAsyncCustomProvider(provider) === (mode === 'async')
   })
   if (customProfile || mode === 'async') return customProfile ?? null
   return settings.profiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'images') ?? null
+}
+
+function getImageGenerationModeProvider(settings: AppSettings, mode: ImageGenerationMode) {
+  const providerId = mode === 'async' ? MIANYUN_ASYNC_PROVIDER_ID : MIANYUN_SYNC_PROVIDER_ID
+  return settings.customProviders.find((provider) => provider.id === providerId)
+    ?? settings.customProviders.find((provider) => isAsyncCustomProvider(provider) === (mode === 'async'))
+    ?? null
 }
 
 function isProfileApiProxyEligible(settings: AppSettings, profile: ApiProfile) {
@@ -386,6 +398,8 @@ export default function SettingsModal() {
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
   const asyncImageProfile = getImageGenerationModeProfile(draft, 'async')
   const syncImageProfile = getImageGenerationModeProfile(draft, 'sync')
+  const asyncImageProvider = getImageGenerationModeProvider(draft, 'async')
+  const syncImageProvider = getImageGenerationModeProvider(draft, 'sync')
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
@@ -589,16 +603,30 @@ export default function SettingsModal() {
   }
 
   const applyImageGenerationMode = (mode: ImageGenerationMode) => {
-    const profile = mode === 'async' ? asyncImageProfile : syncImageProfile
+    const existingProfile = mode === 'async' ? asyncImageProfile : syncImageProfile
+    const provider = mode === 'async' ? asyncImageProvider : syncImageProvider
+    const profile = existingProfile ?? (provider ? {
+      ...activeProfile,
+      id: newId('profile'),
+      name: provider.name,
+      provider: provider.id,
+      model: getImageModelForResolution(mode, params.resolution),
+      apiMode: 'images' as const,
+      codexCli: false,
+      apiProxy: false,
+      streamImages: false,
+      responseFormatB64Json: false,
+    } : null)
     if (!profile) {
       showToast(`未找到${mode === 'async' ? '异步' : '同步'}服务商配置`, 'error')
       return
     }
+    const profiles = existingProfile ? draft.profiles : [...draft.profiles, profile]
     commitSettings(normalizeSettings({
       ...draft,
       imageGenerationMode: mode,
       activeProfileId: profile.id,
-      profiles: draft.profiles.map((item) => item.id === profile.id
+      profiles: profiles.map((item) => item.id === profile.id
         ? { ...item, model: getImageModelForResolution(mode, params.resolution) }
         : item),
     }))
@@ -1396,8 +1424,8 @@ export default function SettingsModal() {
                   <span className="mb-2 block text-sm text-gray-600 dark:text-gray-300">生成方式</span>
                   <div className="grid grid-cols-2 gap-3">
                     {([
-                      { mode: 'async' as const, label: '异步', model: DEFAULT_ASYNC_IMAGES_MODEL, available: Boolean(asyncImageProfile) },
-                      { mode: 'sync' as const, label: '同步', model: DEFAULT_IMAGES_MODEL, available: Boolean(syncImageProfile) },
+                      { mode: 'async' as const, label: '异步', model: DEFAULT_ASYNC_IMAGES_MODEL, available: Boolean(asyncImageProfile || asyncImageProvider) },
+                      { mode: 'sync' as const, label: '同步', model: DEFAULT_IMAGES_MODEL, available: Boolean(syncImageProfile || syncImageProvider) },
                     ]).map((option) => {
                       const selected = draft.imageGenerationMode === option.mode
                       return (

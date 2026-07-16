@@ -518,6 +518,10 @@ describe('custom providers', () => {
     const syncSettings = normalizeSettings({ ...settings, imageGenerationMode: 'sync' })
     expect(syncSettings.activeProfileId).toBe('profile-sync')
     expect(getActiveApiProfile(syncSettings).model).toBe(DEFAULT_IMAGES_MODEL)
+
+    const asyncSettings = normalizeSettings({ ...syncSettings, imageGenerationMode: 'async' })
+    expect(asyncSettings.activeProfileId).toBe('profile-async')
+    expect(getActiveApiProfile(asyncSettings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
   })
 
   it('normalizes custom provider definitions and keeps custom profiles', () => {
