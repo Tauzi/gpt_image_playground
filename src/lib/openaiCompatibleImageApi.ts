@@ -1,6 +1,7 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { isMianyunImageProvider } from './apiProfiles'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
@@ -21,6 +22,45 @@ import {
 } from './imageApiShared'
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
+const MIANYUN_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MIANYUN_MAX_INPUT_IMAGES = 9
+const MIANYUN_MAX_PIXELS = {
+  '1K': 1_048_576,
+  '2K': 4_194_304,
+  '4K': 8_294_400,
+} as const
+
+function validateMianyunRequest(opts: CallApiOptions) {
+  if (opts.params.n !== 1) throw new Error('当前服务仅支持生成 1 张图片')
+  if (opts.inputImageDataUrls.length > MIANYUN_MAX_INPUT_IMAGES) throw new Error(`参考图最多支持 ${MIANYUN_MAX_INPUT_IMAGES} 张`)
+  for (const dataUrl of opts.inputImageDataUrls) {
+    if (getDataUrlDecodedByteSize(dataUrl) > MIANYUN_MAX_IMAGE_BYTES) throw new Error('单张参考图不能超过 10MB')
+  }
+  if (opts.maskDataUrl && getDataUrlDecodedByteSize(opts.maskDataUrl) > MIANYUN_MAX_IMAGE_BYTES) {
+    throw new Error('遮罩文件不能超过 10MB')
+  }
+
+  const size = opts.params.size.trim()
+  const exact = size.match(/^(\d+)[xX×](\d+)$/)
+  if (exact) {
+    const width = Number(exact[1])
+    const height = Number(exact[2])
+    if (width % 16 !== 0 || height % 16 !== 0) throw new Error('精确尺寸的宽高必须都是 16 的倍数')
+    if (Math.max(width, height) > 3840) throw new Error('精确尺寸的最长边不能超过 3840px')
+    if (Math.max(width / height, height / width) > 3) throw new Error('精确尺寸的长短边比例不能超过 3:1')
+    const pixels = width * height
+    if (pixels < 655_360 || pixels > MIANYUN_MAX_PIXELS[opts.params.resolution]) {
+      throw new Error(`${opts.params.resolution} 档位的精确尺寸总像素必须在 655360–${MIANYUN_MAX_PIXELS[opts.params.resolution]} 之间`)
+    }
+    return
+  }
+
+  const ratio = size.match(/^(\d+):(\d+)$/)
+  if (!ratio || Number(ratio[1]) <= 0 || Number(ratio[2]) <= 0) throw new Error('尺寸请输入精确的 WIDTHxHEIGHT 或正整数比例 W:H')
+  if (Math.max(Number(ratio[1]) / Number(ratio[2]), Number(ratio[2]) / Number(ratio[1])) > 3) {
+    throw new Error('尺寸比例不能超过 3:1')
+  }
+}
 
 function getStreamPartialImages(profile: ApiProfile): number {
   return profile.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES
@@ -699,10 +739,16 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 function getTaskState(payload: unknown, poll: CustomProviderPollMapping): 'success' | 'failure' | 'pending' {
   const status = getByPath(payload, poll.statusPath)
-  const statusText = typeof status === 'string' ? status : String(status ?? '')
-  if (poll.successValues.includes(statusText)) return 'success'
-  if (poll.failureValues.includes(statusText)) return 'failure'
+  const statusText = (typeof status === 'string' ? status : String(status ?? '')).trim().toLowerCase()
+  if (poll.successValues.some((value) => value.trim().toLowerCase() === statusText)) return 'success'
+  if (poll.failureValues.some((value) => value.trim().toLowerCase() === statusText)) return 'failure'
   return 'pending'
+}
+
+function attachRawResponsePayload(err: unknown, payload: unknown) {
+  if (!(err instanceof Error) || 'rawResponsePayload' in err) return err
+  ;(err as Error & { rawResponsePayload?: string }).rawResponsePayload = JSON.stringify(payload, null, 2)
+  return err
 }
 
 function isRecoverablePollingError(err: unknown): boolean {
@@ -885,6 +931,7 @@ async function pollCustomTaskResult(
   taskId: string,
   mime: string,
   signal?: AbortSignal,
+  onTaskUpdate?: CallApiOptions['onCustomTaskUpdate'],
 ): Promise<CallApiResult> {
   const proxyConfig = readClientDevProxyConfig()
   const requestHeaders = createRequestHeaders(profile)
@@ -920,17 +967,26 @@ async function pollCustomTaskResult(
       throw err
     }
 
+    const statusValue = getByPath(taskPayload, poll.statusPath)
+    const status = typeof statusValue === 'string' ? statusValue : String(statusValue ?? '')
+    const progressValue = getByPath(taskPayload, 'progress')
+    onTaskUpdate?.({
+      status,
+      ...(typeof progressValue === 'string' && progressValue.trim() ? { progress: progressValue } : {}),
+      rawResponsePayload: JSON.stringify(taskPayload, null, 2),
+    })
+
     const state = getTaskState(taskPayload, poll)
     if (state === 'failure') {
-      const message = getByPath(taskPayload, poll.errorPath) || getByPath(taskPayload, 'message') || getByPath(taskPayload, 'data.fail_reason') || getByPath(taskPayload, 'error.message')
-      throw new Error(typeof message === 'string' && message.trim() ? message : '异步任务失败')
+      const message = getByPath(taskPayload, poll.errorPath) || getByPath(taskPayload, 'data.0.url') || getByPath(taskPayload, 'message') || getByPath(taskPayload, 'data.fail_reason') || getByPath(taskPayload, 'error.message')
+      throw attachRawResponsePayload(new Error(typeof message === 'string' && message.trim() ? message : '异步任务失败'), taskPayload)
     }
     if (state === 'success') {
       try {
         return await extractCustomImages(taskPayload, poll.result, mime, signal)
       } catch (err) {
         if (!signal?.aborted && isRecoverablePollingError(err)) continue
-        throw err
+        throw attachRawResponsePayload(err, taskPayload)
       }
     }
   }
@@ -955,6 +1011,7 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
   let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
 
   try {
+    if (isMianyunImageProvider(profile.provider)) validateMianyunRequest(opts)
     const proxyConfig = readClientDevProxyConfig()
     const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
     const submitMapping = isEdit && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
@@ -979,7 +1036,7 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal)
+    return pollCustomTaskResult(profile, customProvider.poll, taskId, mime, controller.signal, opts.onCustomTaskUpdate)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }

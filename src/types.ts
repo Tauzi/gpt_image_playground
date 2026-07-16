@@ -1,6 +1,8 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
+export type ImageGenerationMode = 'sync' | 'async'
+export type ImageResolution = '1K' | '2K' | '4K'
 export type AppMode = 'gallery' | 'agent'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
@@ -95,6 +97,7 @@ export interface AppSettings {
   apiProxy: boolean
   streamImages?: boolean
   streamPartialImages?: number
+  imageGenerationMode: ImageGenerationMode
   customProviders: CustomProviderDefinition[]
   providerOrder?: string[]
   clearInputAfterSubmit: boolean
@@ -121,6 +124,7 @@ export interface AppSettings {
 
 export interface TaskParams {
   size: string
+  resolution: ImageResolution
   quality: 'auto' | 'low' | 'medium' | 'high'
   output_format: 'png' | 'jpeg' | 'webp'
   output_compression: number | null
@@ -131,6 +135,7 @@ export interface TaskParams {
 
 export const DEFAULT_PARAMS: TaskParams = {
   size: 'auto',
+  resolution: '1K',
   quality: 'auto',
   output_format: 'png',
   output_compression: null,
@@ -182,6 +187,10 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /** 自定义异步任务最近一次轮询状态 */
+  customTaskStatus?: string
+  /** 自定义异步任务最近一次轮询进度 */
+  customTaskProgress?: string
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
-import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { DEFAULT_PARAMS, type ImageResolution, type TaskRecord } from '../types'
+import { getActiveApiProfile, getAgentImageApiProfile, getImageModelForResolution, isMianyunImageProvider, MIANYUN_ASYNC_PROVIDER_ID, MIANYUN_SYNC_PROVIDER_ID, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
@@ -325,7 +325,7 @@ function setContentEditableSelection(el: HTMLElement, start: number, end: number
 }
 
 /** API 支持的最大参考图数量 */
-const API_MAX_IMAGES = 16
+const API_MAX_IMAGES = 9
 
 function getFavoriteCollectionTasksForBatch(collectionId: string, tasks: TaskRecord[]) {
   const favoriteTasks = tasks.filter((task) => task.isFavorite)
@@ -766,6 +766,7 @@ export default function InputBar() {
   }, [setPrompt])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
+  const isMianyunProvider = isMianyunImageProvider(activeProvider)
   const agentAutoImageCount = appMode === 'agent'
   const moderationDisabled = isFalProvider
   const transparentOutputAvailable = appMode === 'gallery'
@@ -782,22 +783,12 @@ export default function InputBar() {
     : isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
-  const displaySize = isFalTextToImage && params.size === 'auto'
+  const displaySize = isMianyunProvider
+    ? params.size
+    : isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
 
-  const qualityOptions = isFalProvider
-    ? [
-        { label: 'low', value: 'low' },
-        { label: 'medium', value: 'medium' },
-        { label: 'high', value: 'high' },
-      ]
-    : [
-        { label: 'auto', value: 'auto' },
-        { label: 'low', value: 'low' },
-        { label: 'medium', value: 'medium' },
-        { label: 'high', value: 'high' },
-      ]
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
   const transparentOutputHint = useHintTooltip()
@@ -807,7 +798,6 @@ export default function InputBar() {
   const compressionHint = useHintTooltip({ enabled: () => compressionDisabled })
   const moderationHint = useHintTooltip({ enabled: () => moderationDisabled })
   const sizeHint = useHintTooltip({ enabled: () => isFalTextToImage })
-  const qualityHint = useHintTooltip({ enabled: () => activeProfile.codexCli || isFalProvider })
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const streamConcurrentHint = useHintTooltip({ enabled: () => streamConcurrentByN })
   const maskTargetImage = maskDraft
@@ -1004,6 +994,37 @@ export default function InputBar() {
     setNInput(String(clampedValue))
     setParams({ n: clampedValue })
   }, [agentAutoImageCount, nInput, nLimitHint, outputImageLimit, params.n, setParams])
+
+  const applyResolution = useCallback((resolution: ImageResolution, mode = settings.imageGenerationMode) => {
+    const providerId = mode === 'async' ? MIANYUN_ASYNC_PROVIDER_ID : MIANYUN_SYNC_PROVIDER_ID
+    const profile = settings.profiles.find((item) => item.provider === providerId)
+    setParams({ resolution })
+    if (!profile) return
+    setSettings(normalizeSettings({
+      ...settings,
+      imageGenerationMode: mode,
+      activeProfileId: profile.id,
+      profiles: settings.profiles.map((item) => item.id === profile.id
+        ? { ...item, model: getImageModelForResolution(mode, resolution) }
+        : item),
+    }))
+  }, [setParams, setSettings, settings])
+
+  const handleResolutionChange = useCallback((resolution: ImageResolution) => {
+    if (resolution === '1K' || settings.imageGenerationMode === 'async') {
+      applyResolution(resolution)
+      return
+    }
+    setConfirmDialog({
+      title: '同步生成可能超时',
+      message: `${resolution} 分辨率生成耗时较长，建议使用异步模式。你仍然可以继续使用同步模式，但请求可能因连接超时而失败。`,
+      icon: 'info',
+      buttons: [
+        { label: '改用异步', action: () => applyResolution(resolution, 'async') },
+        { label: '仍用同步', tone: 'warning', action: () => applyResolution(resolution, 'sync') },
+      ],
+    })
+  }, [applyResolution, setConfirmDialog, settings.imageGenerationMode])
 
   const showNLimitHint = useCallback(() => {
     nLimitHint.show()
@@ -1922,7 +1943,7 @@ export default function InputBar() {
       isFalProvider={isFalProvider}
       isFalTextToImage={isFalTextToImage}
       displaySize={displaySize}
-      qualityOptions={qualityOptions}
+      onResolutionChange={handleResolutionChange}
       selectClass={selectClass}
       transparentOutputAvailable={transparentOutputAvailable}
       showTransparentOutputControl={showTransparentOutputControl}
@@ -1952,7 +1973,6 @@ export default function InputBar() {
       streamConcurrentByN={streamConcurrentByN}
       streamConcurrentHint={streamConcurrentHint}
       sizeHint={sizeHint}
-      qualityHint={qualityHint}
       onOpenSizePicker={() => setShowSizePicker(true)}
     />
   )
@@ -1967,9 +1987,10 @@ export default function InputBar() {
       {showSizePicker && (
         <SizePickerModal
           currentSize={isFalTextToImage && params.size === 'auto' ? DEFAULT_FAL_IMAGE_SIZE : params.size}
+          resolution={params.resolution}
           onSelect={(size) => setParams({ size })}
           onClose={() => setShowSizePicker(false)}
-          allowAuto={!isFalTextToImage}
+          allowAuto={!isFalTextToImage && !isMianyunProvider}
         />
       )}
 

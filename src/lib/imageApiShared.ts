@@ -7,7 +7,7 @@ export const MIME_MAP: Record<string, string> = {
   webp: 'image/webp',
 }
 
-export const MAX_MASK_EDIT_FILE_BYTES = 50 * 1024 * 1024
+export const MAX_MASK_EDIT_FILE_BYTES = 10 * 1024 * 1024
 export const MAX_IMAGE_INPUT_PAYLOAD_BYTES = 512 * 1024 * 1024
 
 export interface CallApiOptions {
@@ -19,6 +19,7 @@ export interface CallApiOptions {
   maskDataUrl?: string
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
+  onCustomTaskUpdate?: (task: { status: string; progress?: string; rawResponsePayload: string }) => void
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number }) => void
 }
 
@@ -180,6 +181,8 @@ export function pickActualParams(source: unknown): Partial<TaskParams> {
   const actualParams: Partial<TaskParams> = {}
 
   if (typeof record.size === 'string') actualParams.size = record.size
+  const resolution = record.resolution ?? record.image_size ?? record.output_resolution
+  if (resolution === '1K' || resolution === '2K' || resolution === '4K') actualParams.resolution = resolution
   if (record.quality === 'auto' || record.quality === 'low' || record.quality === 'medium' || record.quality === 'high') {
     actualParams.quality = record.quality
   }

@@ -303,8 +303,7 @@ export default function TaskCard({
       : 'bg-blue-500'
     : 'bg-gray-200 dark:bg-gray-700'
 
-  const qualityDisplay = getParamDisplay(task, 'quality')
-  const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
+  const resolutionDisplay = getParamDisplay(task, 'resolution')
 
   const sizeDisplay = getParamDisplay(task, 'size')
   const showSize = task.params.size !== 'auto' || sizeDisplay.isMismatch
@@ -602,10 +601,10 @@ export default function TaskCard({
                 </span>
               )}
               {/* Params: only show if not default or mismatch */}
-              {showQuality && (
+              {(
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">质量</span>
-                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
+                  <span className="text-gray-400 dark:text-gray-500">分辨率</span>
+                  {resolutionDisplay.isMismatch ? <ActualValueBadge value={resolutionDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{resolutionDisplay.displayValue}</span>}
                 </span>
               )}
               {showSize && (

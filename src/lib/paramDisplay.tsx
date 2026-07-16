@@ -66,6 +66,8 @@ export function ActualValueBadge({ value, className = '', variant = 'highlight' 
 export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualParams = task.actualParams) {
   const requestedValue = task.sourceMode === 'agent' && paramKey === 'n'
     ? 'auto'
+    : paramKey === 'resolution'
+    ? task.params.resolution ?? '1K'
     : task.params[paramKey]
   const actualValue = actualParams?.[paramKey]
   const hasActualValue = actualValue !== undefined && actualValue !== null

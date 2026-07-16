@@ -3,7 +3,7 @@ import { calculateImageSize } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
-    expect(calculateImageSize('1K', '16:9')).toBe('1280x720')
+    expect(calculateImageSize('1K', '16:9')).toBe('1344x752')
     expect(calculateImageSize('2K', '16:9')).toBe('2560x1440')
     expect(calculateImageSize('4K', '16:9')).toBe('3840x2160')
   })

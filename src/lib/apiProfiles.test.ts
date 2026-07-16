@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_ASYNC_IMAGES_MODEL,
+  DEFAULT_2K_IMAGES_MODEL,
+  DEFAULT_4K_IMAGES_MODEL,
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
@@ -8,10 +11,12 @@ import {
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
   getActiveApiProfile,
+  getImageModelForResolution,
   findEquivalentApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
+  normalizeCustomProviderDefinition,
   normalizeSettings,
   switchApiProfileProvider,
   validateApiProfile,
@@ -422,6 +427,99 @@ describe('mergeImportedSettings', () => {
 })
 
 describe('custom providers', () => {
+  it('maps the selected resolution to the configured model ids', () => {
+    expect(getImageModelForResolution('async', '1K')).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
+    expect(getImageModelForResolution('sync', '1K')).toBe(DEFAULT_IMAGES_MODEL)
+    expect(getImageModelForResolution('async', '2K')).toBe(DEFAULT_2K_IMAGES_MODEL)
+    expect(getImageModelForResolution('async', '4K')).toBe(DEFAULT_4K_IMAGES_MODEL)
+  })
+
+  it('upgrades the configured Mianyun provider fields to the documented contract', () => {
+    const provider = normalizeCustomProviderDefinition({
+      id: 'custom-gpt-image-2-async',
+      name: '绵云异步',
+      submit: { path: 'images/generations', body: { stream: false }, taskIdPath: 'id' },
+      editSubmit: {
+        path: 'images/edits',
+        contentType: 'multipart',
+        body: { stream: false },
+        files: [{ field: 'image[]', source: 'inputImages' }],
+        taskIdPath: 'id',
+      },
+      poll: {
+        path: 'images/generations/{task_id}',
+        statusPath: 'status',
+        successValues: ['completed'],
+        failureValues: ['failed'],
+        result: { imageUrlPaths: ['data.*.url'] },
+      },
+    })
+
+    expect(provider?.submit.body).toEqual({
+      model: '$profile.model',
+      prompt: '$prompt',
+      async: true,
+      size: '$params.size',
+      quality: '$params.quality',
+      n: 1,
+    })
+    expect(provider?.editSubmit?.files).toEqual([
+      { field: 'image', source: 'inputImages', array: true },
+      { field: 'mask', source: 'mask' },
+    ])
+  })
+
+  it('defaults to the async profile and switches models with generation mode', () => {
+    const settings = normalizeSettings({
+      customProviders: [
+        {
+          id: 'custom-sync',
+          name: 'Custom Sync',
+          submit: { path: 'images/generations' },
+        },
+        {
+          id: 'custom-async',
+          name: 'Custom Async',
+          submit: { path: 'images/generations', taskIdPath: 'data' },
+          poll: {
+            path: 'images/tasks/{task_id}',
+            statusPath: 'data.status',
+            successValues: ['SUCCESS'],
+            failureValues: ['FAILURE'],
+            result: { imageUrlPaths: ['data.url'] },
+          },
+        },
+      ],
+      profiles: [
+        {
+          id: 'profile-sync',
+          name: 'Sync',
+          provider: 'custom-sync',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'key',
+          model: 'legacy-sync-model',
+        },
+        {
+          id: 'profile-async',
+          name: 'Async',
+          provider: 'custom-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'key',
+          model: 'legacy-async-model',
+        },
+      ],
+      activeProfileId: 'profile-sync',
+    })
+
+    expect(settings.imageGenerationMode).toBe('async')
+    expect(settings.activeProfileId).toBe('profile-async')
+    expect(getActiveApiProfile(settings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
+
+    const syncSettings = normalizeSettings({ ...settings, imageGenerationMode: 'sync' })
+    expect(syncSettings.activeProfileId).toBe('profile-sync')
+    expect(getActiveApiProfile(syncSettings).model).toBe(DEFAULT_IMAGES_MODEL)
+  })
+
   it('normalizes custom provider definitions and keeps custom profiles', () => {
     const settings = normalizeSettings({
       customProviders: [{

@@ -19,7 +19,7 @@ export default function InputParamsPanel({
   isFalProvider,
   isFalTextToImage,
   displaySize,
-  qualityOptions,
+  onResolutionChange,
   selectClass,
   transparentOutputAvailable,
   showTransparentOutputControl,
@@ -49,7 +49,6 @@ export default function InputParamsPanel({
   streamConcurrentByN,
   streamConcurrentHint,
   sizeHint,
-  qualityHint,
   onOpenSizePicker,
 }: {
   cols: string
@@ -59,7 +58,7 @@ export default function InputParamsPanel({
   isFalProvider: boolean
   isFalTextToImage: boolean
   displaySize: string
-  qualityOptions: Array<{ label: string; value: string }>
+  onResolutionChange: (resolution: TaskParams['resolution']) => void
   selectClass: string
   transparentOutputAvailable: boolean
   showTransparentOutputControl: boolean
@@ -89,7 +88,6 @@ export default function InputParamsPanel({
   streamConcurrentByN: boolean
   streamConcurrentHint: HintTooltipState
   sizeHint: HintTooltipState
-  qualityHint: HintTooltipState
   onOpenSizePicker: () => void
 }) {
   return (
@@ -117,31 +115,18 @@ export default function InputParamsPanel({
           text={<>fal.ai 的文生图模式不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 参数</>}
         />
       </label>
-      <label
-        className="relative flex flex-col gap-0.5"
-        onMouseEnter={qualityHint.show}
-        onMouseLeave={qualityHint.hide}
-        onTouchStart={qualityHint.startTouch}
-        onTouchEnd={qualityHint.clearTimer}
-        onTouchCancel={qualityHint.hide}
-        onClick={qualityHint.show}
-      >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
+      <label className="relative flex flex-col gap-0.5">
+        <span className="text-gray-400 dark:text-gray-500 ml-1">分辨率</span>
         <Select
-          value={activeProfile.codexCli ? 'auto' : isFalProvider && params.quality === 'auto' ? 'high' : params.quality}
-          onChange={(val) => {
-            if (!activeProfile.codexCli) setParams({ quality: val as TaskParams['quality'] })
-          }}
-          options={qualityOptions}
-          disabled={activeProfile.codexCli}
+          value={params.resolution}
+          onChange={(value) => onResolutionChange(value as TaskParams['resolution'])}
+          options={[
+            { label: '1K', value: '1K' },
+            { label: '2K', value: '2K' },
+            { label: '4K', value: '4K' },
+          ]}
           showValueTooltips={false}
-          className={activeProfile.codexCli
-            ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
-            : selectClass}
-        />
-        <ButtonTooltip
-          visible={(activeProfile.codexCli || isFalProvider) && qualityHint.visible}
-          text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
+          className={selectClass}
         />
       </label>
       <label className="flex flex-col gap-0.5">

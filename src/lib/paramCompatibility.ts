@@ -1,5 +1,5 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
-import { getActiveApiProfile } from './apiProfiles'
+import { getActiveApiProfile, isMianyunImageProvider } from './apiProfiles'
 import { normalizeImageSize } from './size'
 
 export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
@@ -7,7 +7,9 @@ export const MAX_FAL_OUTPUT_IMAGES = 4
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
 
 export function getOutputImageLimitForSettings(settings: AppSettings) {
-  return getActiveApiProfile(settings).provider === 'fal' ? MAX_FAL_OUTPUT_IMAGES : MAX_OPENAI_OUTPUT_IMAGES
+  const provider = getActiveApiProfile(settings).provider
+  if (isMianyunImageProvider(provider)) return 1
+  return provider === 'fal' ? MAX_FAL_OUTPUT_IMAGES : MAX_OPENAI_OUTPUT_IMAGES
 }
 
 export function normalizeParamsForSettings(
@@ -19,7 +21,10 @@ export function normalizeParamsForSettings(
   const outputImageLimit = getOutputImageLimitForSettings(settings)
   const nextParams: TaskParams = {
     ...params,
-    size: normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
+    resolution: params.resolution === '2K' || params.resolution === '4K' ? params.resolution : '1K',
+    size: isMianyunImageProvider(activeProfile.provider)
+      ? params.size.trim() === '' || params.size === 'auto' ? '1:1' : params.size.trim()
+      : normalizeImageSize(params.size) || DEFAULT_PARAMS.size,
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 

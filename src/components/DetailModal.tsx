@@ -695,10 +695,18 @@ export default function DetailModal() {
                 </>
               )}
               {task.status === 'running' && streamPreviewLen === 0 && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  {task.customTaskStatus && (
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      <span className="font-mono">{task.customTaskStatus}</span>
+                      {task.customTaskProgress ? ` · ${task.customTaskProgress}` : ''}
+                    </div>
+                  )}
+                </div>
               )}
             </>
           )}
@@ -725,6 +733,11 @@ export default function DetailModal() {
               >
                 {task.error || '生成失败'}
               </p>
+              {task.rawResponsePayload && (
+                <pre data-selectable-text className="mt-3 max-h-40 w-full overflow-auto rounded-xl border border-red-100 bg-red-50/70 p-3 text-left font-mono text-[11px] leading-5 text-red-700 whitespace-pre-wrap break-all dark:border-red-500/15 dark:bg-red-500/[0.06] dark:text-red-300">
+                  {task.rawResponsePayload.replace(/"(b64_json|base64)":\s*"[^"]+"/g, '"$1": "<base64_data>"')}
+                </pre>
+              )}
               <div className="mt-3 flex items-center justify-center gap-2">
                 <div className="relative group">
                   <button
@@ -978,10 +991,10 @@ export default function DetailModal() {
                 </div>
               </div>
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 min-w-0 overflow-hidden">
-                <span className="text-gray-400 dark:text-gray-500">质量</span>
+                <span className="text-gray-400 dark:text-gray-500">分辨率</span>
                 <br />
                 <div className="mt-0.5 overflow-x-auto hide-scrollbar whitespace-nowrap mask-edge-r pr-2">
-                  <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
+                  <DetailParamValue task={task} paramKey="resolution" className="font-medium" actualParams={currentActualParams} />
                 </div>
               </div>
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2 min-w-0 overflow-hidden">

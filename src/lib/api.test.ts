@@ -960,4 +960,161 @@ describe('callImageApi', () => {
       images: ['data:image/png;base64,aW1hZ2U='],
     })
   })
+
+  it('sends the documented async fields and 2K model for the configured provider', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'completed',
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        imageGenerationMode: 'async',
+        customProviders: [{
+          id: 'custom-gpt-image-2-async',
+          name: '绵云异步',
+          submit: {
+            path: 'images/generations',
+            body: { stream: false },
+            taskIdPath: 'id',
+          },
+          poll: {
+            path: 'images/generations/{task_id}',
+            statusPath: 'status',
+            successValues: ['completed'],
+            failureValues: ['failed'],
+            result: { b64JsonPaths: ['data.*.b64_json'] },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'mianyun-async',
+          provider: 'custom-gpt-image-2-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+        }],
+        activeProfileId: 'mianyun-async',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS, resolution: '2K', size: '1:1' },
+      inputImageDataUrls: [],
+    })).resolves.toEqual({ images: ['data:image/png;base64,aW1hZ2U='] })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      model: 'gpt-image-2-2k-async',
+      prompt: 'prompt',
+      async: true,
+      size: '1:1',
+      quality: 'auto',
+      n: 1,
+    })
+  })
+
+  it('records in_progress status and progress before the async task completes', async () => {
+    vi.useFakeTimers()
+    const onCustomTaskUpdate = vi.fn()
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'task-1',
+        status: 'in_progress',
+        progress: '30%',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'task-1',
+        status: 'completed',
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const promise = callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        customProviders: [{
+          id: 'custom-gpt-image-2-async',
+          name: '绵云异步',
+          submit: { path: 'images/generations', taskIdPath: 'id' },
+          poll: {
+            path: 'images/generations/{task_id}',
+            intervalSeconds: 1,
+            statusPath: 'status',
+            successValues: ['completed'],
+            failureValues: ['failed'],
+            result: { imageUrlPaths: ['data.*.url'] },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'mianyun-async',
+          provider: 'custom-gpt-image-2-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+        }],
+        activeProfileId: 'mianyun-async',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS, size: '1:1' },
+      inputImageDataUrls: [],
+      onCustomTaskUpdate,
+    })
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(onCustomTaskUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: 'in_progress', progress: '30%' }))
+    await vi.advanceTimersByTimeAsync(1000)
+    await expect(promise).resolves.toEqual({ images: ['data:image/png;base64,aW1hZ2U='] })
+    expect(onCustomTaskUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'completed' }))
+  })
+
+  it('exposes the failed async response and data url error message', async () => {
+    const failedPayload = {
+      id: 'task-1',
+      status: 'failed',
+      data: [{ url: 'bad response status code 422', b64_json: '', revised_prompt: '' }],
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(failedPayload), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const error = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        customProviders: [{
+          id: 'custom-gpt-image-2-async',
+          name: '绵云异步',
+          submit: { path: 'images/generations', taskIdPath: 'id' },
+          poll: {
+            path: 'images/generations/{task_id}',
+            statusPath: 'status',
+            successValues: ['completed'],
+            failureValues: ['failed'],
+            result: { imageUrlPaths: ['data.*.url'] },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'mianyun-async',
+          provider: 'custom-gpt-image-2-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+        }],
+        activeProfileId: 'mianyun-async',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS, size: '1:1' },
+      inputImageDataUrls: [],
+    }).catch((err) => err as Error & { rawResponsePayload?: string })
+
+    expect(error).toBeInstanceOf(Error)
+    const failedError = error as Error & { rawResponsePayload?: string }
+    expect(failedError.message).toBe('bad response status code 422')
+    expect(failedError.rawResponsePayload).toBe(JSON.stringify(failedPayload, null, 2))
+  })
 })

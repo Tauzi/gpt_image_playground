@@ -6,6 +6,7 @@ import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from 
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
+  DEFAULT_ASYNC_IMAGES_MODEL,
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
@@ -15,6 +16,7 @@ import {
   findEquivalentApiProfile,
   getApiProviderLabel,
   getActiveApiProfile,
+  getImageModelForResolution,
   importCustomProviderSettingsFromJson,
   isDefaultConfigOnlyEnabled,
   isAgentTextApiProfile,
@@ -28,7 +30,7 @@ import {
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ImageGenerationMode, type ZipDownloadRoute } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
@@ -203,6 +205,15 @@ function isAsyncCustomProvider(provider: CustomProviderDefinition | null | undef
   return Boolean(provider?.poll || provider?.submit.taskIdPath || provider?.editSubmit?.taskIdPath)
 }
 
+function getImageGenerationModeProfile(settings: AppSettings, mode: ImageGenerationMode) {
+  const customProfile = settings.profiles.find((profile) => {
+    const provider = settings.customProviders.find((item) => item.id === profile.provider)
+    return provider && isAsyncCustomProvider(provider) === (mode === 'async')
+  })
+  if (customProfile || mode === 'async') return customProfile ?? null
+  return settings.profiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'images') ?? null
+}
+
 function isProfileApiProxyEligible(settings: AppSettings, profile: ApiProfile) {
   if (!isOpenAICompatibleProvider(settings, profile.provider)) return false
   const customProvider = settings.customProviders.find((provider) => provider.id === profile.provider)
@@ -301,6 +312,7 @@ export default function SettingsModal() {
   const settingsTabRequest = useStore((s) => s.settingsTabRequest)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
+  const params = useStore((s) => s.params)
   const setSettings = useStore((s) => s.setSettings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setReusedTaskApiProfile = useStore((s) => s.setReusedTaskApiProfile)
@@ -372,6 +384,8 @@ export default function SettingsModal() {
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
+  const asyncImageProfile = getImageGenerationModeProfile(draft, 'async')
+  const syncImageProfile = getImageGenerationModeProfile(draft, 'sync')
   const defaultProviderOrder = ['openai', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
@@ -572,6 +586,51 @@ export default function SettingsModal() {
     })
     setDraft(normalizedDraft)
     setSettings(normalizedDraft)
+  }
+
+  const applyImageGenerationMode = (mode: ImageGenerationMode) => {
+    const profile = mode === 'async' ? asyncImageProfile : syncImageProfile
+    if (!profile) {
+      showToast(`未找到${mode === 'async' ? '异步' : '同步'}服务商配置`, 'error')
+      return
+    }
+    commitSettings(normalizeSettings({
+      ...draft,
+      imageGenerationMode: mode,
+      activeProfileId: profile.id,
+      profiles: draft.profiles.map((item) => item.id === profile.id
+        ? { ...item, model: getImageModelForResolution(mode, params.resolution) }
+        : item),
+    }))
+  }
+
+  const updateImageGenerationMode = (mode: ImageGenerationMode) => {
+    if (mode !== 'sync' || params.resolution === '1K') {
+      applyImageGenerationMode(mode)
+      return
+    }
+    setConfirmDialog({
+      title: '同步生成可能超时',
+      message: `${params.resolution} 分辨率生成耗时较长，建议继续使用异步模式。同步请求可能因连接超时而失败。`,
+      confirmText: '仍使用同步',
+      cancelText: '保持异步',
+      tone: 'warning',
+      icon: 'info',
+      action: () => applyImageGenerationMode('sync'),
+    })
+  }
+
+  const updateImageApiKey = (apiKey: string, commit = false) => {
+    const profileIds = new Set([asyncImageProfile?.id, syncImageProfile?.id].filter((id): id is string => Boolean(id)))
+    const nextDraft = normalizeSettings({
+      ...draft,
+      profiles: draft.profiles.map((profile) => profileIds.has(profile.id) ? { ...profile, apiKey } : profile),
+    })
+    if (commit) {
+      commitSettings(nextDraft)
+      return
+    }
+    setDraft(nextDraft)
   }
 
   const setZipDownloadRouteEnabled = (route: ZipDownloadRoute, enabled: boolean) => {
@@ -1334,6 +1393,76 @@ export default function SettingsModal() {
             {activeTab === 'api' && (
               <div className="space-y-4">
                 <div>
+                  <span className="mb-2 block text-sm text-gray-600 dark:text-gray-300">生成方式</span>
+                  <div className="grid grid-cols-2 gap-3">
+                    {([
+                      { mode: 'async' as const, label: '异步', model: DEFAULT_ASYNC_IMAGES_MODEL, available: Boolean(asyncImageProfile) },
+                      { mode: 'sync' as const, label: '同步', model: DEFAULT_IMAGES_MODEL, available: Boolean(syncImageProfile) },
+                    ]).map((option) => {
+                      const selected = draft.imageGenerationMode === option.mode
+                      return (
+                        <button
+                          key={option.mode}
+                          type="button"
+                          onClick={() => updateImageGenerationMode(option.mode)}
+                          disabled={!option.available}
+                          className={`rounded-2xl border p-4 text-left transition ${selected
+                            ? 'border-blue-400 bg-blue-50/80 ring-1 ring-blue-400/30 dark:border-blue-500/70 dark:bg-blue-500/10'
+                            : 'border-gray-200/70 bg-white/60 hover:border-blue-200 hover:bg-blue-50/40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:hover:border-blue-500/30 dark:hover:bg-blue-500/[0.06]'} ${option.available ? '' : 'cursor-not-allowed opacity-45'}`}
+                        >
+                          <span className={`block text-sm font-medium ${selected ? 'text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-200'}`}>
+                            {option.label}
+                          </span>
+                          <code className="mt-1.5 block text-xs text-gray-500 dark:text-gray-400">{option.model}</code>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                  <div className="relative">
+                    <input
+                      value={activeProfile.apiKey}
+                      onChange={(event) => updateImageApiKey(event.target.value)}
+                      onBlur={(event) => updateImageApiKey(event.target.value, true)}
+                      type={showApiKey ? 'text' : 'password'}
+                      placeholder="sk-..."
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((visible) => !visible)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-200"
+                      tabIndex={-1}
+                      aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
+                    >
+                      {showApiKey ? (
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      ) : (
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                          <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">同步和异步共用此 API Key。</div>
+                </div>
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-4 text-[13px] leading-relaxed text-gray-500 dark:border-white/[0.05] dark:bg-white/[0.02] dark:text-gray-400">
+                  已自动使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{getImageModelForResolution(draft.imageGenerationMode, params.resolution)}</code>，服务商地址、密钥和接口配置保持不变。
+                </div>
+              </div>
+            )}
+
+            {false && activeTab === 'api' && (
+              <div className="space-y-4">
+                <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">当前配置</span>
                     <span className="relative inline-flex">
@@ -1674,7 +1803,7 @@ export default function SettingsModal() {
                   {activeProfile.provider === 'fal' ? (
                     <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
                   ) : activeCustomProvider ? (
-                    <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
+                    <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider?.name}</code>。</>
                   ) : (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' ? (
                     <>Responses API 需要使用支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具的文本模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_RESPONSES_MODEL}</code>。</>
                   ) : (

@@ -19,7 +19,7 @@ import type {
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageModelForResolution, isMianyunImageProvider, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -760,6 +760,11 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     ...currentState,
     ...persisted,
     settings,
+    params: {
+      ...DEFAULT_PARAMS,
+      ...(persisted.params ?? {}),
+      resolution: persisted.params?.resolution === '2K' || persisted.params?.resolution === '4K' ? persisted.params.resolution : '1K',
+    },
     appMode,
     galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,
     agentConversations,
@@ -2338,6 +2343,9 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
+  if (isMianyunImageProvider(activeProfile.provider)) {
+    activeProfile = { ...activeProfile, model: getImageModelForResolution(normalizedSettings.imageGenerationMode, params.resolution) }
+  }
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
@@ -2358,7 +2366,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
       }
     } else {
       activeProfile = reusedProfile
-      requestSettings = createSettingsForApiProfile(normalizedSettings, reusedProfile)
+      if (isMianyunImageProvider(activeProfile.provider)) {
+        activeProfile = { ...activeProfile, model: getImageModelForResolution(normalizedSettings.imageGenerationMode, params.resolution) }
+      }
+      requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
     }
   }
 
@@ -4729,6 +4740,13 @@ async function executeTask(taskId: string) {
           customRecoverable: false,
         })
       },
+      onCustomTaskUpdate: (update) => {
+        updateTaskInStore(taskId, {
+          customTaskStatus: update.status,
+          customTaskProgress: update.progress,
+          rawResponsePayload: update.rawResponsePayload,
+        })
+      },
       onPartialImage: (partial) => {
         useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
         void persistTaskStreamPartialImage(taskId, partial.image)
@@ -4797,6 +4815,7 @@ async function executeTask(taskId: string) {
       actualParamsByImage,
       revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
       status: 'done',
+      customTaskStatus: isAsyncCustomTask ? 'completed' : latestBeforeUpdate.customTaskStatus,
       finishedAt: Date.now(),
       elapsed: Date.now() - task.createdAt,
       falRecoverable: false,

@@ -12,6 +12,8 @@ import type {
   CustomProviderResultMapping,
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
+  ImageGenerationMode,
+  ImageResolution,
   ReferenceImageEditAction,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
@@ -30,11 +32,26 @@ const DEFAULT_API_URL_PATCH = isImportableConfigUrl(RAW_DEFAULT_API_URL)
   : parseDefaultApiUrl(RAW_DEFAULT_API_URL || (DOCKER_DEPLOYMENT && DEFAULT_OPENAI_API_PROXY ? '' : OPENAI_DEFAULT_BASE_URL))
 const DEFAULT_BASE_URL = DEFAULT_API_URL_PATCH?.baseUrl ?? ''
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
+export const DEFAULT_ASYNC_IMAGES_MODEL = 'gpt-image-2-async'
+export const DEFAULT_2K_IMAGES_MODEL = 'gpt-image-2-2k-async'
+export const DEFAULT_4K_IMAGES_MODEL = 'gpt-image-2-4K-async'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
 export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
+export const MIANYUN_SYNC_PROVIDER_ID = 'custom-gpt-image-2-sync'
+export const MIANYUN_ASYNC_PROVIDER_ID = 'custom-gpt-image-2-async'
+
+export function isMianyunImageProvider(provider: ApiProvider) {
+  return provider === MIANYUN_SYNC_PROVIDER_ID || provider === MIANYUN_ASYNC_PROVIDER_ID
+}
+
+export function getImageModelForResolution(mode: ImageGenerationMode, resolution: ImageResolution) {
+  if (resolution === '2K') return DEFAULT_2K_IMAGES_MODEL
+  if (resolution === '4K') return DEFAULT_4K_IMAGES_MODEL
+  return mode === 'async' ? DEFAULT_ASYNC_IMAGES_MODEL : DEFAULT_IMAGES_MODEL
+}
 
 const BUILT_IN_PROVIDER_IDS = new Set<ApiProvider>(['openai', 'fal'])
 const DEFAULT_CUSTOM_PROVIDER_PATHS = {
@@ -284,7 +301,7 @@ export function normalizeCustomProviderDefinition(input: unknown, usedIds = new 
     : createCustomProviderId(rawName, usedIds)
   usedIds.add(id)
 
-  return {
+  const provider: CustomProviderDefinition = {
     id,
     name: rawName,
     template,
@@ -304,6 +321,49 @@ export function normalizeCustomProviderDefinition(input: unknown, usedIds = new 
       result: DEFAULT_OPENAI_RESULT,
     }) : undefined,
     poll: normalizePollMapping(record.poll),
+  }
+
+  if (!isMianyunImageProvider(id)) return provider
+  const async = id === MIANYUN_ASYNC_PROVIDER_ID
+  return {
+    ...provider,
+    submit: {
+      ...provider.submit,
+      body: {
+        model: '$profile.model',
+        prompt: '$prompt',
+        async,
+        size: '$params.size',
+        quality: '$params.quality',
+        n: 1,
+      },
+    },
+    editSubmit: provider.editSubmit ? {
+      ...provider.editSubmit,
+      body: {
+        model: '$profile.model',
+        prompt: '$prompt',
+        async,
+        size: '$params.size',
+        quality: '$params.quality',
+        n: 1,
+      },
+      files: [
+        { field: 'image', source: 'inputImages', array: true },
+        { field: 'mask', source: 'mask' },
+      ],
+    } : undefined,
+    poll: async && provider.poll ? {
+      ...provider.poll,
+      statusPath: 'status',
+      successValues: ['completed'],
+      failureValues: ['failed'],
+      errorPath: 'data.0.url',
+      result: {
+        imageUrlPaths: ['data.*.url'],
+        b64JsonPaths: ['data.*.b64_json'],
+      },
+    } : provider.poll,
   }
 }
 
@@ -520,12 +580,33 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     streamImages: typeof record.streamImages === 'boolean' ? record.streamImages : undefined,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages),
   })
-  const profiles = Array.isArray(record.profiles) && record.profiles.length
+  const rawProfiles = Array.isArray(record.profiles) && record.profiles.length
     ? record.profiles.map((profile) => normalizeApiProfile(profile, undefined, customProviderIds))
     : [legacyProfile]
-  const activeProfileId = typeof record.activeProfileId === 'string' && profiles.some((p) => p.id === record.activeProfileId)
+  const imageGenerationMode: ImageGenerationMode = record.imageGenerationMode === 'sync' ? 'sync' : 'async'
+  const storedActiveProfileId = typeof record.activeProfileId === 'string' && rawProfiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
-    : profiles[0].id
+    : rawProfiles[0].id
+  const matchingCustomProfile = rawProfiles.find((profile) => {
+    const provider = customProviders.find((item) => item.id === profile.provider)
+    if (!provider) return false
+    const asyncProvider = Boolean(provider.poll || provider.submit.taskIdPath || provider.editSubmit?.taskIdPath)
+    return asyncProvider === (imageGenerationMode === 'async')
+  })
+  const modeProfile = matchingCustomProfile ?? (imageGenerationMode === 'sync'
+    ? rawProfiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'images')
+    : undefined)
+  const activeProfileId = modeProfile?.id ?? storedActiveProfileId
+  const profiles = modeProfile
+    ? rawProfiles.map((profile) => profile.id === modeProfile.id
+      ? {
+          ...profile,
+          model: profile.model === DEFAULT_2K_IMAGES_MODEL || profile.model === DEFAULT_4K_IMAGES_MODEL
+            ? profile.model
+            : getImageModelForResolution(imageGenerationMode, '1K'),
+        }
+      : profile)
+    : rawProfiles
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
   const agentApiConfigMode = normalizeAgentApiConfigMode(record.agentApiConfigMode)
   const firstAgentTextProfile = profiles.find(isAgentTextApiProfile)
@@ -546,6 +627,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     apiProxy: active.apiProxy,
     streamImages: active.streamImages,
     streamPartialImages: active.streamPartialImages,
+    imageGenerationMode,
     customProviders,
     providerOrder: normalizeProviderOrder(record.providerOrder, customProviders),
     clearInputAfterSubmit: typeof record.clearInputAfterSubmit === 'boolean' ? record.clearInputAfterSubmit : false,
@@ -855,6 +937,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   apiProxy: DEFAULT_OPENAI_API_PROXY,
   streamImages: DEFAULT_API_URL_PATCH?.streamImages ?? getDefaultStreamImages('openai', DEFAULT_API_URL_PATCH?.apiMode ?? 'images'),
   streamPartialImages: DEFAULT_API_URL_PATCH?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
+  imageGenerationMode: 'async',
   customProviders: [],
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
