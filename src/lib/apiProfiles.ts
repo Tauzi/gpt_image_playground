@@ -42,6 +42,56 @@ export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
 export const MIANYUN_SYNC_PROVIDER_ID = 'custom-gpt-image-2-sync'
 export const MIANYUN_ASYNC_PROVIDER_ID = 'custom-gpt-image-2-async'
+export const MIANYUN_BASE_URL = 'https://mianyunai.com/v1'
+const MIANYUN_SYNC_PROFILE_ID = 'default-mianyun-sync'
+const MIANYUN_ASYNC_PROFILE_ID = 'default-mianyun-async'
+
+const MIANYUN_DEFAULT_PROVIDERS: CustomProviderDefinition[] = [
+  {
+    id: MIANYUN_SYNC_PROVIDER_ID,
+    name: '绵云-gpt-image-2',
+    template: 'http-image',
+    submit: {
+      path: 'images/generations',
+      method: 'POST',
+      contentType: 'json',
+      result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: ['data.*.b64_json'] },
+    },
+    editSubmit: {
+      path: 'images/edits',
+      method: 'POST',
+      contentType: 'multipart',
+      result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: ['data.*.b64_json'] },
+    },
+  },
+  {
+    id: MIANYUN_ASYNC_PROVIDER_ID,
+    name: '绵云-gpt-image-2异步',
+    template: 'http-image',
+    submit: {
+      path: 'images/generations',
+      method: 'POST',
+      contentType: 'json',
+      taskIdPath: 'id',
+    },
+    editSubmit: {
+      path: 'images/edits',
+      method: 'POST',
+      contentType: 'multipart',
+      taskIdPath: 'id',
+    },
+    poll: {
+      path: 'images/generations/{task_id}',
+      method: 'GET',
+      intervalSeconds: 8,
+      statusPath: 'status',
+      successValues: ['completed'],
+      failureValues: ['failed'],
+      errorPath: 'data.0.url',
+      result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: ['data.*.b64_json'] },
+    },
+  },
+]
 
 export function isMianyunImageProvider(provider: ApiProvider) {
   return provider === MIANYUN_SYNC_PROVIDER_ID || provider === MIANYUN_ASYNC_PROVIDER_ID
@@ -956,3 +1006,49 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   agentTextProfileId: null,
   agentImageProfileId: null,
 })
+
+export function ensureMianyunSettings(input: Partial<AppSettings> | unknown): AppSettings {
+  const current = normalizeSettings(input)
+  const customProviders = [
+    ...current.customProviders,
+    ...MIANYUN_DEFAULT_PROVIDERS.filter((provider) => !current.customProviders.some((item) => item.id === provider.id)),
+  ]
+  const sharedApiKey = current.profiles.find((profile) => isMianyunImageProvider(profile.provider) && profile.apiKey.trim())?.apiKey
+    ?? current.apiKey.trim()
+  const profiles = [...current.profiles]
+
+  for (const mode of ['sync', 'async'] as const) {
+    const providerId = mode === 'async' ? MIANYUN_ASYNC_PROVIDER_ID : MIANYUN_SYNC_PROVIDER_ID
+    if (profiles.some((profile) => profile.provider === providerId)) continue
+    const sameModeProfile = profiles.find((profile) => {
+      const provider = customProviders.find((item) => item.id === profile.provider)
+      const asyncProvider = Boolean(provider?.poll || provider?.submit.taskIdPath || provider?.editSubmit?.taskIdPath)
+      return provider && asyncProvider === (mode === 'async')
+    })
+    const source = sameModeProfile ?? profiles.find((profile) => isMianyunImageProvider(profile.provider)) ?? createDefaultOpenAIProfile()
+    profiles.push({
+      ...source,
+      id: mode === 'async' ? MIANYUN_ASYNC_PROFILE_ID : MIANYUN_SYNC_PROFILE_ID,
+      name: mode === 'async' ? '绵云-gpt-image-2异步' : '绵云-gpt-image-2',
+      provider: providerId,
+      baseUrl: MIANYUN_BASE_URL,
+      apiKey: sharedApiKey,
+      model: getImageModelForResolution(mode, '1K'),
+      apiMode: 'images',
+      codexCli: false,
+      apiProxy: false,
+      responseFormatB64Json: false,
+      streamImages: false,
+      streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
+    })
+  }
+
+  const syncedProfiles = sharedApiKey
+    ? profiles.map((profile) => isMianyunImageProvider(profile.provider) ? { ...profile, apiKey: sharedApiKey } : profile)
+    : profiles
+  const targetProvider = current.imageGenerationMode === 'sync' ? MIANYUN_SYNC_PROVIDER_ID : MIANYUN_ASYNC_PROVIDER_ID
+  const activeProfileId = syncedProfiles.find((profile) => profile.provider === targetProvider)?.id ?? current.activeProfileId
+  return normalizeSettings({ ...current, customProviders, profiles: syncedProfiles, activeProfileId })
+}
+
+export const MIANYUN_DEFAULT_SETTINGS: AppSettings = ensureMianyunSettings(DEFAULT_SETTINGS)

@@ -19,7 +19,7 @@ import type {
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageModelForResolution, isMianyunImageProvider, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, ensureMianyunSettings, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageModelForResolution, isMianyunImageProvider, mergeImportedSettings, MIANYUN_DEFAULT_SETTINGS, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -713,7 +713,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
   if (!persistedState || typeof persistedState !== 'object') return currentState
 
   const persisted = persistedState as Partial<AppState>
-  const settings = normalizeSettings(persisted.settings ?? currentState.settings)
+  const settings = ensureMianyunSettings(persisted.settings ?? currentState.settings)
   const hasPersistedAgentConversations = Array.isArray(persisted.agentConversations)
   if (hasPersistedAgentConversations && normalizeAgentConversations(persisted.agentConversations).length > 0) {
     agentConversationMigrationPending = true
@@ -1233,7 +1233,7 @@ export const useStore = create<AppState>()(
       },
 
       // Settings
-      settings: { ...DEFAULT_SETTINGS },
+      settings: { ...MIANYUN_DEFAULT_SETTINGS },
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
@@ -5356,7 +5356,7 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
 
   if (options.clearConfig) {
     useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
-    setSettings({ ...DEFAULT_SETTINGS })
+    setSettings({ ...MIANYUN_DEFAULT_SETTINGS })
     setParams({ ...DEFAULT_PARAMS })
   }
 
