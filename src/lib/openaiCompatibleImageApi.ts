@@ -25,7 +25,7 @@ const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prom
 const MIANYUN_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MIANYUN_MAX_INPUT_IMAGES = 9
 const MIANYUN_MAX_PIXELS = {
-  '1K': 1_048_576,
+  '1K': 1_572_864,
   '2K': 4_194_304,
   '4K': 8_294_400,
 } as const

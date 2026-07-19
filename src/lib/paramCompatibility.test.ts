@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './apiProfiles'
-import { getOutputImageLimitForSettings, normalizeParamsForSettings } from './paramCompatibility'
+import { getMianyunImageSize, getOutputImageLimitForSettings, normalizeParamsForSettings } from './paramCompatibility'
 
 describe('parameter compatibility', () => {
+  it('converts Mianyun ratios to upstream exact-size presets', () => {
+    expect(getMianyunImageSize('1K', '1:1')).toBe('1024x1024')
+    expect(getMianyunImageSize('1K', '3:2')).toBe('1536x1024')
+    expect(getMianyunImageSize('2K', '1:1')).toBe('2048x2048')
+    expect(getMianyunImageSize('4K', '16:9')).toBe('3840x2160')
+    expect(getMianyunImageSize('1K', 'auto')).toBe('1024x1024')
+  })
+
+  it('keeps Mianyun exact sizes unchanged', () => {
+    expect(getMianyunImageSize('1K', '1024x1024')).toBe('1024x1024')
+  })
+
   it('limits OpenAI output count to 10', () => {
     const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: false })
     const settings = normalizeSettings({

@@ -2,16 +2,21 @@ import { getActiveApiProfile, getCustomProviderDefinition, getImageModelForResol
 import { callFalAiImageApi } from './falAiImageApi'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
 import type { CallApiOptions, CallApiResult } from './imageApiShared'
+import { getMianyunImageSize } from './paramCompatibility'
 
 export type { CallApiOptions, CallApiResult } from './imageApiShared'
 export { normalizeBaseUrl } from './devProxy'
 
 export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
   const activeProfile = getActiveApiProfile(opts.settings)
-  const profile = isMianyunImageProvider(activeProfile.provider)
-    ? { ...activeProfile, model: getImageModelForResolution(opts.settings.imageGenerationMode, opts.params.resolution) }
+  const isMianyun = isMianyunImageProvider(activeProfile.provider)
+  const requestOpts = isMianyun
+    ? { ...opts, params: { ...opts.params, size: getMianyunImageSize(opts.params.resolution, opts.params.size) } }
+    : opts
+  const profile = isMianyun
+    ? { ...activeProfile, model: getImageModelForResolution(opts.settings.imageGenerationMode, requestOpts.params.resolution) }
     : activeProfile
-  if (profile.provider === 'fal') return callFalAiImageApi(opts, profile)
+  if (profile.provider === 'fal') return callFalAiImageApi(requestOpts, profile)
 
-  return callOpenAICompatibleImageApi(opts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
+  return callOpenAICompatibleImageApi(requestOpts, profile, getCustomProviderDefinition(opts.settings, profile.provider))
 }

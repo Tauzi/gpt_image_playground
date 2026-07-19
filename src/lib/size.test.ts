@@ -3,9 +3,15 @@ import { calculateImageSize } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
-    expect(calculateImageSize('1K', '16:9')).toBe('1344x752')
+    expect(calculateImageSize('1K', '16:9')).toBe('1280x720')
     expect(calculateImageSize('2K', '16:9')).toBe('2560x1440')
     expect(calculateImageSize('4K', '16:9')).toBe('3840x2160')
+  })
+
+  it('uses the upstream 1K exact-size presets', () => {
+    expect(calculateImageSize('1K', '1:1')).toBe('1024x1024')
+    expect(calculateImageSize('1K', '3:2')).toBe('1536x1024')
+    expect(calculateImageSize('1K', '2:3')).toBe('1024x1536')
   })
 
   it('uses matching portrait presets for common ratios', () => {
