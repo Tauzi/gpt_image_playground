@@ -155,7 +155,7 @@ export function formatImageRatio(width: number, height: number) {
  * 在该预算内、满足所有 OpenAI 约束的前提下，选取总像素最大的候选尺寸。
  */
 const TIER_PIXEL_BUDGET: Record<SizeTier, number> = {
-  '1K': 1_572_864,   // 1024 × 1536
+  '1K': 1_048_576,   // 1024 × 1024
   '2K': 4_194_304,   // 2048 × 2048
   '4K': MAX_PIXELS,  // 8_294_400
 }
@@ -167,13 +167,13 @@ const TIER_PIXEL_BUDGET: Record<SizeTier, number> = {
 const COMMON_SIZE_PRESETS: Record<SizeTier, Record<PresetRatio, string>> = {
   '1K': {
     '1:1': '1024x1024',
-    '3:2': '1536x1024',
-    '2:3': '1024x1536',
-    '16:9': '1280x720',
-    '9:16': '720x1280',
-    '4:3': '1024x768',
-    '3:4': '768x1024',
-    '21:9': '1280x544',
+    '3:2': '1248x832',
+    '2:3': '832x1248',
+    '16:9': '1344x752',
+    '9:16': '752x1344',
+    '4:3': '1152x864',
+    '3:4': '864x1152',
+    '21:9': '1456x624',
   },
   '2K': {
     '1:1': '2048x2048',
@@ -200,10 +200,14 @@ const COMMON_SIZE_PRESETS: Record<SizeTier, Record<PresetRatio, string>> = {
 function getPresetRatioKey(ratioWidth: number, ratioHeight: number): PresetRatio | null {
   if (!Number.isInteger(ratioWidth) || !Number.isInteger(ratioHeight)) return null
 
+  const directKey = `${ratioWidth}:${ratioHeight}`
+  if (directKey in COMMON_SIZE_PRESETS['1K']) return directKey as PresetRatio
+
   const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b)
   const divisor = gcd(ratioWidth, ratioHeight)
   const key = `${ratioWidth / divisor}:${ratioHeight / divisor}`
 
+  if (key === '7:3') return '21:9'
   return key in COMMON_SIZE_PRESETS['1K'] ? key as PresetRatio : null
 }
 

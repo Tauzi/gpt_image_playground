@@ -4,9 +4,11 @@ import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, 
 import { getMianyunImageSize, getOutputImageLimitForSettings, normalizeParamsForSettings } from './paramCompatibility'
 
 describe('parameter compatibility', () => {
-  it('converts Mianyun ratios to upstream exact-size presets', () => {
+  it('converts Mianyun ratios to exact-size presets within each tier limit', () => {
     expect(getMianyunImageSize('1K', '1:1')).toBe('1024x1024')
-    expect(getMianyunImageSize('1K', '3:2')).toBe('1536x1024')
+    expect(getMianyunImageSize('1K', '3:2')).toBe('1248x832')
+    expect(getMianyunImageSize('1K', '2:3')).toBe('832x1248')
+    expect(getMianyunImageSize('1K', '21:9')).toBe('1456x624')
     expect(getMianyunImageSize('2K', '1:1')).toBe('2048x2048')
     expect(getMianyunImageSize('4K', '16:9')).toBe('3840x2160')
     expect(getMianyunImageSize('1K', 'auto')).toBe('1024x1024')
