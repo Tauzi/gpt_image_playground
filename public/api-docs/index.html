@@ -1,0 +1,1380 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="绵云 gpt-image-2 文生图 API 调用文档">
+  <meta name="theme-color" content="#f5f8fc">
+  <title>gpt-image-2 API 调用文档 | 绵云 AI</title>
+  <link rel="icon" href="/pwa-icon.svg">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f8fc;
+      --surface: #ffffff;
+      --surface-muted: #edf3f8;
+      --text: #10253d;
+      --text-muted: #58708a;
+      --border: #d5e0ea;
+      --border-strong: #bdccda;
+      --accent: #287db5;
+      --accent-strong: #12649a;
+      --accent-soft: #e5f2fb;
+      --success: #23744f;
+      --success-soft: #e7f5ed;
+      --warning: #8b5e00;
+      --warning-soft: #fff4d5;
+      --danger: #ae2d24;
+      --danger-soft: #ffebe8;
+      --code-bg: #102235;
+      --code-text: #edf5fb;
+      --code-muted: #a9bfd2;
+      --shadow: 0 10px 26px rgba(28, 62, 90, 0.09);
+      --header-height: 60px;
+      --sidebar-width: 250px;
+    }
+
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #111c2a;
+      --surface: #172639;
+      --surface-muted: #20344a;
+      --text: #e9f2fb;
+      --text-muted: #aec0d2;
+      --border: #38506a;
+      --border-strong: #526f8b;
+      --accent: #70b8ea;
+      --accent-strong: #9bd2f4;
+      --accent-soft: #1c3c5a;
+      --success: #72d1a7;
+      --success-soft: #17372a;
+      --warning: #f1bd55;
+      --warning-soft: #3a3018;
+      --danger: #ff958c;
+      --danger-soft: #432421;
+      --code-bg: #0b1522;
+      --code-text: #edf5fb;
+      --code-muted: #a9bfd2;
+      --shadow: 0 14px 36px rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 15px;
+      line-height: 1.72;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    a {
+      color: var(--accent-strong);
+      text-decoration: none;
+    }
+
+    a:hover {
+      color: var(--accent);
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 100;
+      padding: 8px 12px;
+      color: var(--surface);
+      background: var(--text);
+      border-radius: 5px;
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .topbar {
+      position: fixed;
+      inset: 0 0 auto 0;
+      z-index: 40;
+      height: var(--header-height);
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(260px, 560px) auto;
+      align-items: center;
+      gap: 22px;
+      padding: 0 20px;
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(14px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      color: var(--text);
+      font-weight: 730;
+    }
+
+    .brand-mark {
+      width: 31px;
+      height: 31px;
+      flex: 0 0 31px;
+      display: grid;
+      place-items: center;
+      margin-right: 10px;
+      color: #ffffff;
+      background: var(--accent);
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 820;
+    }
+
+    .brand-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .search-wrap {
+      position: relative;
+      min-width: 0;
+    }
+
+    .search-wrap svg {
+      position: absolute;
+      top: 50%;
+      left: 12px;
+      width: 17px;
+      height: 17px;
+      color: var(--text-muted);
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+
+    .search-input {
+      width: 100%;
+      height: 36px;
+      padding: 0 12px 0 38px;
+      color: var(--text);
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .search-input:focus {
+      background: var(--surface);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .model-chip {
+      min-width: 0;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .model-dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 7px;
+      background: var(--success);
+      border-radius: 50%;
+    }
+
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 36px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .icon-button:hover {
+      background: var(--surface-muted);
+      border-color: var(--border);
+    }
+
+    .icon-button:focus-visible,
+    .segment-button:focus-visible {
+      outline: 3px solid var(--accent-soft);
+      border-color: var(--accent);
+    }
+
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .menu-button {
+      display: none;
+    }
+
+    .sidebar {
+      position: fixed;
+      top: var(--header-height);
+      bottom: 0;
+      left: 0;
+      z-index: 30;
+      width: var(--sidebar-width);
+      padding: 22px 14px 36px;
+      overflow-y: auto;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+    }
+
+    .nav-label {
+      margin: 0 10px 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 760;
+      text-transform: uppercase;
+    }
+
+    .nav-list {
+      display: grid;
+      gap: 2px;
+      margin: 0 0 24px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      min-height: 35px;
+      padding: 6px 10px;
+      color: var(--text-muted);
+      border-left: 2px solid transparent;
+      border-radius: 0 5px 5px 0;
+      font-size: 14px;
+    }
+
+    .nav-link:hover {
+      color: var(--text);
+      background: var(--surface-muted);
+    }
+
+    .nav-link.active {
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border-left-color: var(--accent);
+      font-weight: 680;
+    }
+
+    .sidebar-meta {
+      margin: 18px 10px 0;
+      padding-top: 16px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+    }
+
+    .backdrop {
+      display: none;
+    }
+
+    .main {
+      width: calc(100% - var(--sidebar-width));
+      min-width: 0;
+      margin-left: var(--sidebar-width);
+      padding: calc(var(--header-height) + 42px) 44px 80px;
+    }
+
+    .content {
+      width: min(100%, 960px);
+      min-width: 0;
+      margin: 0 auto;
+    }
+
+    .doc-section {
+      scroll-margin-top: calc(var(--header-height) + 20px);
+      margin: 0 0 48px;
+      padding: 0 0 48px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .doc-section:last-of-type {
+      border-bottom: 0;
+    }
+
+    .intro {
+      padding-bottom: 42px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--accent-strong);
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.3;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 760px;
+      font-size: 38px;
+      font-weight: 790;
+    }
+
+    h2 {
+      margin-bottom: 14px;
+      font-size: 25px;
+      font-weight: 750;
+    }
+
+    h3 {
+      margin: 30px 0 10px;
+      font-size: 17px;
+      font-weight: 730;
+    }
+
+    p {
+      margin: 0 0 16px;
+    }
+
+    .lead {
+      max-width: 760px;
+      margin: 14px 0 22px;
+      color: var(--text-muted);
+      font-size: 17px;
+    }
+
+    .metadata {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 26px;
+    }
+
+    .tag {
+      padding: 4px 8px;
+      color: var(--text-muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 670;
+    }
+
+    .tag.success {
+      color: var(--success);
+      background: var(--success-soft);
+      border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+    }
+
+    .endpoint {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      min-height: 50px;
+      padding: 8px 9px 8px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+    }
+
+    .method {
+      color: var(--success);
+      font-size: 12px;
+      font-weight: 840;
+    }
+
+    .endpoint code {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .copy-endpoint {
+      border-color: var(--border);
+    }
+
+    .section-copy {
+      max-width: 780px;
+      color: var(--text-muted);
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .lead,
+    .callout {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .callout {
+      margin: 22px 0;
+      padding: 14px 16px;
+      color: var(--text);
+      background: var(--accent-soft);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+    }
+
+    .callout.warning {
+      background: var(--warning-soft);
+      border-left-color: var(--warning);
+    }
+
+    .callout.danger {
+      background: var(--danger-soft);
+      border-left-color: var(--danger);
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    .code-shell {
+      position: relative;
+      margin: 18px 0 24px;
+      overflow: hidden;
+      background: var(--code-bg);
+      border: 1px solid color-mix(in srgb, var(--border-strong) 45%, transparent);
+      border-radius: 6px;
+    }
+
+    .code-label {
+      min-height: 35px;
+      display: flex;
+      align-items: center;
+      padding: 0 48px 0 14px;
+      color: var(--code-muted);
+      border-bottom: 1px solid #26343a;
+      font-size: 12px;
+      font-weight: 670;
+    }
+
+    .copy-code {
+      position: absolute;
+      top: 4px;
+      right: 5px;
+      z-index: 2;
+      color: #c2cfd4;
+    }
+
+    .copy-code:hover {
+      color: #ffffff;
+      background: #26343a;
+      border-color: #425259;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow-x: auto;
+      color: var(--code-text);
+      font-size: 13px;
+      line-height: 1.65;
+      tab-size: 2;
+    }
+
+    .inline-code {
+      padding: 2px 5px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border-radius: 4px;
+      font-size: 0.92em;
+    }
+
+    .table-wrap {
+      margin: 18px 0 24px;
+      overflow-x: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 11px 14px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      color: var(--text-muted);
+      background: var(--surface-muted);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    td {
+      font-size: 14px;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    td code {
+      color: var(--accent-strong);
+      font-size: 13px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      gap: 3px;
+      margin: 8px 0 18px;
+      padding: 3px;
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+
+    .segment-button {
+      min-width: 78px;
+      height: 32px;
+      padding: 0 13px;
+      color: var(--text-muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 690;
+    }
+
+    .segment-button:hover {
+      color: var(--text);
+    }
+
+    .segment-button.active {
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 1px 4px rgba(15, 31, 41, 0.12);
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
+    .ratio-list {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(80px, 1fr));
+      gap: 8px;
+      margin: 18px 0;
+    }
+
+    .ratio-item {
+      padding: 9px 10px;
+      text-align: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .response-grid {
+      max-width: 780px;
+    }
+
+    .rules {
+      display: grid;
+      gap: 10px;
+      margin: 18px 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .rules li {
+      position: relative;
+      padding-left: 22px;
+    }
+
+    .rules li::before {
+      content: "";
+      position: absolute;
+      top: 0.73em;
+      left: 4px;
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+      transform: translateY(-50%);
+    }
+
+    .empty-state {
+      display: none;
+      padding: 64px 20px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .empty-state.visible {
+      display: block;
+    }
+
+    .footer {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 60;
+      padding: 9px 12px;
+      color: #ffffff;
+      background: #17242a;
+      border: 1px solid #34464d;
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 920px) {
+      .topbar {
+        grid-template-columns: auto minmax(180px, 1fr) auto;
+        gap: 12px;
+      }
+
+      .brand-text {
+        display: none;
+      }
+
+      .brand-mark {
+        margin-right: 0;
+      }
+
+      .menu-button {
+        display: inline-grid;
+      }
+
+      .sidebar {
+        width: min(82vw, 286px);
+        transform: translateX(-102%);
+        transition: transform 180ms ease;
+        box-shadow: var(--shadow);
+      }
+
+      .sidebar.open {
+        transform: translateX(0);
+      }
+
+      .backdrop {
+        position: fixed;
+        inset: var(--header-height) 0 0 0;
+        z-index: 20;
+        background: rgba(7, 14, 18, 0.44);
+      }
+
+      .backdrop.visible {
+        display: block;
+      }
+
+      .main {
+        width: 100%;
+        margin-left: 0;
+        padding: calc(var(--header-height) + 34px) 24px 64px;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        display: flex;
+        padding: 0 12px;
+      }
+
+      .search-wrap {
+        display: none;
+      }
+
+      .top-actions {
+        flex: 0 1 auto;
+        justify-self: end;
+        margin-left: auto;
+      }
+
+      .main {
+        padding-right: 16px;
+        padding-left: 16px;
+      }
+
+      h1 {
+        font-size: 30px;
+      }
+
+      h2 {
+        font-size: 22px;
+      }
+
+      .lead {
+        font-size: 16px;
+      }
+
+      .endpoint {
+        gap: 8px;
+      }
+
+      .endpoint code {
+        font-size: 11px;
+      }
+
+      .ratio-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .doc-section {
+        margin-bottom: 38px;
+        padding-bottom: 38px;
+      }
+
+      pre {
+        padding: 14px;
+        font-size: 12px;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        width: 100%;
+      }
+
+      .segment-button {
+        min-width: 0;
+        padding: 0 8px;
+      }
+    }
+
+    @media (max-width: 430px) {
+      .model-chip {
+        max-width: calc(100vw - 138px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .metadata {
+        gap: 6px;
+      }
+
+      .method {
+        font-size: 11px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到正文</a>
+
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="返回文档顶部">
+      <span class="brand-mark">MY</span>
+      <span class="brand-text">绵云 Image API Docs</span>
+    </a>
+
+    <label class="search-wrap" aria-label="搜索文档">
+      <i data-lucide="search"></i>
+      <input id="doc-search" class="search-input" type="search" placeholder="搜索参数、尺寸或错误码">
+    </label>
+
+    <div class="top-actions">
+      <span class="model-chip"><span class="model-dot"></span>gpt-image-2</span>
+      <button id="theme-toggle" class="icon-button" type="button" title="切换主题" aria-label="切换主题">
+        <i data-lucide="moon"></i>
+      </button>
+      <button id="menu-toggle" class="icon-button menu-button" type="button" title="打开目录" aria-label="打开目录" aria-expanded="false">
+        <i data-lucide="menu"></i>
+      </button>
+    </div>
+  </header>
+
+  <aside id="sidebar" class="sidebar" aria-label="文档目录">
+    <p class="nav-label">API 文档</p>
+    <nav>
+      <ul class="nav-list">
+        <li><a class="nav-link active" href="#overview">概览</a></li>
+        <li><a class="nav-link" href="#quickstart">快速开始</a></li>
+        <li><a class="nav-link" href="#parameters">请求参数</a></li>
+        <li><a class="nav-link" href="#sizes">尺寸与比例</a></li>
+        <li><a class="nav-link" href="#examples">调用示例</a></li>
+        <li><a class="nav-link" href="#response">响应格式</a></li>
+        <li><a class="nav-link" href="#errors">错误处理</a></li>
+        <li><a class="nav-link" href="#browser">浏览器调用</a></li>
+        <li><a class="nav-link" href="#notes">使用须知</a></li>
+      </ul>
+    </nav>
+    <div class="sidebar-meta">
+      Base URL<br>
+      <code>https://mianyunai.com</code>
+    </div>
+  </aside>
+
+  <div id="backdrop" class="backdrop"></div>
+
+  <main id="main-content" class="main">
+    <div class="content">
+      <section id="overview" class="doc-section intro" data-search="概览 endpoint base url 鉴权 gpt-image-2 1k 2k">
+        <p class="eyebrow">绵云图像接口</p>
+        <h1>gpt-image-2 文生图 API</h1>
+        <p class="lead">通过 OpenAI 兼容接口生成 1K 或 2K 图片。图片尺寸直接使用 <code class="inline-code">size</code> 参数传递，无需在模型名称后拼接任何后缀。</p>
+
+        <div class="metadata">
+          <span class="tag">OpenAI 兼容</span>
+          <span class="tag">1K / 2K</span>
+          <span class="tag">low / medium / high</span>
+          <span class="tag success">服务可用</span>
+        </div>
+
+        <div class="endpoint">
+          <span class="method">POST</span>
+          <code id="endpoint-url">https://mianyunai.com/v1/images/generations</code>
+          <button class="icon-button copy-endpoint" type="button" data-copy-target="#endpoint-url" title="复制接口地址" aria-label="复制接口地址">
+            <i data-lucide="copy"></i>
+          </button>
+        </div>
+
+        <div class="callout">
+          <strong>鉴权</strong>
+          请求头填写绵云 API 用户密钥：<code class="inline-code">Authorization: Bearer YOUR_API_KEY</code>。
+        </div>
+      </section>
+
+      <section id="quickstart" class="doc-section" data-search="快速开始 curl token authorization 1024 quality low">
+        <h2>快速开始</h2>
+        <p class="section-copy">下面的请求会生成一张 1024 × 1024 图片。请将示例密钥替换为你的 API 用户令牌。</p>
+
+        <div class="code-shell">
+          <div class="code-label">cURL</div>
+          <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+          <pre><code>curl -X POST "https://mianyunai.com/v1/images/generations" \
+  -H "Authorization: Bearer 你的API密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-image-2",
+    "prompt": "一只坐在窗边的橘猫，柔和自然光，真实摄影风格",
+    "size": "1024x1024",
+    "quality": "low",
+    "n": 1
+  }'</code></pre>
+        </div>
+
+        <div class="callout warning">
+          <strong>模型名称</strong>
+          <code class="inline-code">model</code> 固定填写 <code class="inline-code">gpt-image-2</code>，不要添加 <code class="inline-code">-low</code>、<code class="inline-code">-2k</code> 或 <code class="inline-code">-4k</code> 后缀。
+        </div>
+      </section>
+
+      <section id="parameters" class="doc-section" data-search="请求参数 model prompt size quality n response_format user">
+        <h2>请求参数</h2>
+        <p class="section-copy">请求体使用 JSON。图片尺寸统一通过 <code class="inline-code">size</code> 字段传递，直接填写推荐的像素尺寸。</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>参数</th><th>类型</th><th>必填</th><th>默认值</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>model</code></td><td>string</td><td>是</td><td>-</td><td>固定填写 <code>gpt-image-2</code></td></tr>
+              <tr><td><code>prompt</code></td><td>string</td><td>是</td><td>-</td><td>图片生成提示词</td></tr>
+              <tr><td><code>size</code></td><td>string</td><td>否</td><td><code>1024x1024</code></td><td>直接传递推荐像素尺寸，例如 <code>1024x1024</code> 或 <code>2048x1152</code></td></tr>
+              <tr><td><code>quality</code></td><td>string</td><td>否</td><td><code>low</code></td><td>支持 <code>low</code>、<code>medium</code>、<code>high</code></td></tr>
+              <tr><td><code>n</code></td><td>integer</td><td>否</td><td><code>1</code></td><td>生成数量，多张支持情况取决于上游</td></tr>
+              <tr><td><code>response_format</code></td><td>string</td><td>否</td><td>上游决定</td><td>常见值为 <code>url</code> 或 <code>b64_json</code></td></tr>
+              <tr><td><code>user</code></td><td>string</td><td>否</td><td>-</td><td>可选的终端用户标识</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>质量选项</h3>
+        <div class="ratio-list" aria-label="质量选项">
+          <div class="ratio-item">low</div>
+          <div class="ratio-item">medium</div>
+          <div class="ratio-item">high</div>
+        </div>
+        <p class="section-copy">未传递质量时默认使用 <code class="inline-code">low</code>。</p>
+      </section>
+
+      <section id="sizes" class="doc-section" data-search="尺寸与比例 1k 2k size 1:1 5:4 9:16 21:9 16:9 4:3 3:2 4:5 3:4 2:3">
+        <h2>尺寸与比例</h2>
+        <p class="section-copy">优先使用下表中的推荐尺寸。21:9 建议通过 <code class="inline-code">size</code> 与服务端支持的比例组合明确指定。</p>
+
+        <div class="segmented" role="tablist" aria-label="分辨率尺寸表" data-tabs="sizes">
+          <button class="segment-button active" type="button" role="tab" aria-selected="true" data-tab="1k">1K</button>
+          <button class="segment-button" type="button" role="tab" aria-selected="false" data-tab="2k">2K</button>
+        </div>
+
+        <div class="tab-panel" data-panel-group="sizes" data-panel="1k">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>比例</th><th>推荐尺寸</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td>1:1</td><td><code>1024x1024</code></td><td>方图</td></tr>
+                <tr><td>5:4</td><td><code>1280x1024</code></td><td>横向产品图</td></tr>
+                <tr><td>9:16</td><td><code>576x1024</code></td><td>竖屏内容</td></tr>
+                <tr><td>21:9</td><td><code>1k + 21:9</code></td><td>使用显式参数</td></tr>
+                <tr><td>16:9</td><td><code>1024x576</code></td><td>横屏封面</td></tr>
+                <tr><td>4:3</td><td><code>1024x768</code></td><td>标准横图</td></tr>
+                <tr><td>3:2</td><td><code>1536x1024</code></td><td>摄影比例</td></tr>
+                <tr><td>4:5</td><td><code>1024x1280</code></td><td>竖向海报</td></tr>
+                <tr><td>3:4</td><td><code>768x1024</code></td><td>标准竖图</td></tr>
+                <tr><td>2:3</td><td><code>1024x1536</code></td><td>摄影竖图</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel-group="sizes" data-panel="2k" hidden>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>比例</th><th>推荐尺寸</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td>1:1</td><td><code>2048x2048</code></td><td>2K 方图</td></tr>
+                <tr><td>5:4</td><td><code>2560x2048</code></td><td>横向产品图</td></tr>
+                <tr><td>9:16</td><td><code>1152x2048</code></td><td>2K 竖屏</td></tr>
+                <tr><td>21:9</td><td><code>2k + 21:9</code></td><td>使用显式参数</td></tr>
+                <tr><td>16:9</td><td><code>2048x1152</code></td><td>2K 横屏</td></tr>
+                <tr><td>4:3</td><td><code>2048x1536</code></td><td>标准横图</td></tr>
+                <tr><td>3:2</td><td><code>3072x2048</code></td><td>摄影横图</td></tr>
+                <tr><td>4:5</td><td><code>2048x2560</code></td><td>竖向海报</td></tr>
+                <tr><td>3:4</td><td><code>1536x2048</code></td><td>标准竖图</td></tr>
+                <tr><td>2:3</td><td><code>2048x3072</code></td><td>摄影竖图</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <h3>支持比例</h3>
+        <div class="ratio-list">
+          <div class="ratio-item">1:1</div>
+          <div class="ratio-item">5:4</div>
+          <div class="ratio-item">9:16</div>
+          <div class="ratio-item">21:9</div>
+          <div class="ratio-item">16:9</div>
+          <div class="ratio-item">4:3</div>
+          <div class="ratio-item">3:2</div>
+          <div class="ratio-item">4:5</div>
+          <div class="ratio-item">3:4</div>
+          <div class="ratio-item">2:3</div>
+        </div>
+
+        <div class="callout">
+          <strong>尺寸字段</strong>
+          所有示例均通过 <code class="inline-code">size</code> 传递尺寸；需要 21:9 时按接口实际支持的组合值填写。
+        </div>
+      </section>
+
+      <section id="examples" class="doc-section" data-search="调用示例 curl JavaScript fetch Python requests size 2048x1152 16:9 high">
+        <h2>调用示例</h2>
+        <p class="section-copy">以下示例生成一张 2K、16:9 的宽银幕图片，尺寸通过 <code class="inline-code">size</code> 直接传入。</p>
+
+        <div class="segmented" role="tablist" aria-label="代码语言" data-tabs="examples">
+          <button class="segment-button active" type="button" role="tab" aria-selected="true" data-tab="curl">cURL</button>
+          <button class="segment-button" type="button" role="tab" aria-selected="false" data-tab="javascript">JavaScript</button>
+          <button class="segment-button" type="button" role="tab" aria-selected="false" data-tab="python">Python</button>
+        </div>
+
+        <div class="tab-panel" data-panel-group="examples" data-panel="curl">
+          <div class="code-shell">
+            <div class="code-label">cURL</div>
+            <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+            <pre><code>curl -X POST "https://mianyunai.com/v1/images/generations" \
+  -H "Authorization: Bearer 你的API密钥" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-image-2",
+    "prompt": "宽银幕电影感的雪山日出，云海，金色阳光，细节丰富",
+    "size": "2048x1152",
+    "quality": "high",
+    "n": 1
+  }'</code></pre>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel-group="examples" data-panel="javascript" hidden>
+          <div class="code-shell">
+            <div class="code-label">JavaScript</div>
+            <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+            <pre><code>const response = await fetch(
+  "https://mianyunai.com/v1/images/generations",
+  {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer 你的API密钥",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: "gpt-image-2",
+      prompt: "宽银幕电影感的雪山日出，云海，金色阳光",
+      size: "2048x1152",
+      quality: "high",
+      n: 1
+    })
+  }
+);
+
+const result = await response.json();
+if (!response.ok) {
+  throw new Error(result.error?.message || "图片生成失败");
+}
+
+console.log(result.data[0].url);</code></pre>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel-group="examples" data-panel="python" hidden>
+          <div class="code-shell">
+            <div class="code-label">Python</div>
+            <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+            <pre><code>import requests
+
+url = "https://mianyunai.com/v1/images/generations"
+headers = {
+    "Authorization": "Bearer 你的API密钥",
+    "Content-Type": "application/json",
+}
+payload = {
+    "model": "gpt-image-2",
+    "prompt": "宽银幕电影感的雪山日出，云海，金色阳光",
+    "size": "2048x1152",
+    "quality": "high",
+    "n": 1,
+}
+
+response = requests.post(url, headers=headers, json=payload, timeout=600)
+response.raise_for_status()
+print(response.json()["data"][0]["url"])</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="response" class="doc-section" data-search="响应格式 created data url b64_json 图片结果">
+        <h2>响应格式</h2>
+        <div class="response-grid">
+          <div>
+            <p class="section-copy">成功响应通常包含图片 URL。客户端应先检查 HTTP 状态，再读取 <code class="inline-code">data[0].url</code>。</p>
+            <div class="code-shell">
+              <div class="code-label">JSON Response</div>
+              <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+              <pre><code>{
+  "created": 1784515242,
+  "data": [
+    {
+      "url": "https://图片域名/generated/output.png"
+    }
+  ]
+}</code></pre>
+            </div>
+            <p class="section-copy">上游返回 Base64 数据时，图片字段可能为 <code class="inline-code">b64_json</code>。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <section id="errors" class="doc-section" data-search="错误 400 401 404 429 500 502 504 invalid_parameter">
+        <h2>错误处理</h2>
+        <p class="section-copy">错误响应使用统一的 <code class="inline-code">error</code> 对象。建议记录 HTTP 状态码、错误码和 message。</p>
+
+        <div class="code-shell">
+          <div class="code-label">参数错误响应</div>
+          <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+          <pre><code>{
+  "error": {
+    "message": "Unsupported size for model gpt-image-2",
+    "type": "invalid_request_error",
+    "param": "size",
+    "code": "invalid_parameter"
+  }
+}</code></pre>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>HTTP 状态</th><th>含义</th><th>处理建议</th></tr></thead>
+            <tbody>
+              <tr><td><code>400</code></td><td>尺寸或质量参数无效</td><td>检查 model、size 和 quality</td></tr>
+              <tr><td><code>401</code></td><td>API 用户密钥无效</td><td>检查 Authorization 请求头</td></tr>
+              <tr><td><code>404</code></td><td>接口路径或模型配置错误</td><td>确认使用 <code>/v1/images/generations</code></td></tr>
+              <tr><td><code>429</code></td><td>请求频率过高或额度不足</td><td>降低并发或检查账户额度</td></tr>
+              <tr><td><code>500</code></td><td>服务端或上游异常</td><td>稍后重试并保留错误信息</td></tr>
+              <tr><td><code>502 / 504</code></td><td>上游不可用或生成超时</td><td>延长超时并检查反向代理</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="browser" class="doc-section" data-search="浏览器 CORS 跨域 HTTPS Mixed Content fetch 同源反代">
+        <h2>浏览器调用</h2>
+        <p class="section-copy">前端应用建议通过自己的后端或同域路径转发请求，以避免跨域限制并保护 API 密钥。</p>
+
+        <div class="code-shell">
+          <div class="code-label">JavaScript · 同源路径</div>
+          <button class="icon-button copy-code" type="button" data-copy-code title="复制代码" aria-label="复制代码"><i data-lucide="copy"></i></button>
+          <pre><code>const response = await fetch("/api/images/generations", {
+  method: "POST",
+  headers: {
+    "Authorization": "Bearer 你的API密钥",
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    model: "gpt-image-2",
+    prompt: "一座漂浮在云层之上的未来城市",
+    size: "2048x2048",
+    quality: "high"
+  })
+});</code></pre>
+        </div>
+
+        <div class="callout warning">
+          <strong>HTTPS 图片地址</strong>
+          HTTPS 网页不能安全读取 HTTP 图片。接口返回的图片 URL 也应使用 HTTPS，否则浏览器可能以 Mixed Content 为由拦截。
+        </div>
+
+        <div class="callout danger">
+          <strong>不要在公开网页内置固定密钥</strong>
+          写入前端 JavaScript 的密钥可以被访问者查看。正式业务应由自己的后端代为请求，或使用用户独立且受限的密钥。
+        </div>
+      </section>
+
+      <section id="notes" class="doc-section" data-search="使用须知 超时 密钥 model size 600秒">
+        <h2>使用须知</h2>
+        <ul class="rules">
+          <li>客户端使用绵云 API 用户密钥，不要共享或公开密钥。</li>
+          <li>请求模型名称必须准确填写为 <code class="inline-code">gpt-image-2</code>。</li>
+          <li>所有图片尺寸通过 <code class="inline-code">size</code> 传递，不要把分辨率写入模型名称。</li>
+          <li>推荐直接使用尺寸表中的像素值，例如 <code class="inline-code">1024x1024</code>、<code class="inline-code">2048x1152</code>。</li>
+          <li>2K 生成可能需要较长时间，客户端和反向代理超时建议设置为至少 300 秒。</li>
+          <li>返回图片可能具有有效期，重要结果应及时下载到自己的存储服务。</li>
+        </ul>
+      </section>
+
+      <div id="empty-state" class="empty-state">没有找到匹配的文档内容。</div>
+
+      <footer class="footer">
+        gpt-image-2 API Documentation · OpenAI Compatible · 更新于 2026-07-21
+      </footer>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite">已复制</div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script>
+    const root = document.documentElement
+    const themeButton = document.getElementById('theme-toggle')
+    const menuButton = document.getElementById('menu-toggle')
+    const sidebar = document.getElementById('sidebar')
+    const backdrop = document.getElementById('backdrop')
+    const searchInput = document.getElementById('doc-search')
+    const emptyState = document.getElementById('empty-state')
+    const toast = document.getElementById('toast')
+    let toastTimer
+
+    function renderIcons() {
+      if (window.lucide) window.lucide.createIcons({ attrs: { 'stroke-width': 1.8 } })
+    }
+
+    function setTheme(theme) {
+      root.dataset.theme = theme
+      localStorage.setItem('api-docs-theme-v2', theme)
+      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#172639' : '#f5f8fc'
+      themeButton.innerHTML = theme === 'dark' ? '<i data-lucide="sun"></i>' : '<i data-lucide="moon"></i>'
+      themeButton.title = theme === 'dark' ? '切换为浅色主题' : '切换为深色主题'
+      renderIcons()
+    }
+
+    const savedTheme = localStorage.getItem('api-docs-theme-v2')
+    const preferredTheme = 'light'
+    setTheme(savedTheme || preferredTheme)
+
+    themeButton.addEventListener('click', () => {
+      setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark')
+    })
+
+    function setMenu(open) {
+      sidebar.classList.toggle('open', open)
+      backdrop.classList.toggle('visible', open)
+      menuButton.setAttribute('aria-expanded', String(open))
+      menuButton.innerHTML = open ? '<i data-lucide="x"></i>' : '<i data-lucide="menu"></i>'
+      renderIcons()
+    }
+
+    menuButton.addEventListener('click', () => setMenu(!sidebar.classList.contains('open')))
+    backdrop.addEventListener('click', () => setMenu(false))
+    document.querySelectorAll('.nav-link').forEach((link) => {
+      link.addEventListener('click', () => setMenu(false))
+    })
+
+    document.querySelectorAll('[data-tabs]').forEach((tabList) => {
+      const group = tabList.dataset.tabs
+      tabList.querySelectorAll('[data-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          tabList.querySelectorAll('[data-tab]').forEach((item) => {
+            const selected = item === button
+            item.classList.toggle('active', selected)
+            item.setAttribute('aria-selected', String(selected))
+          })
+          document.querySelectorAll(`[data-panel-group="${group}"]`).forEach((panel) => {
+            panel.hidden = panel.dataset.panel !== button.dataset.tab
+          })
+        })
+      })
+    })
+
+    function showToast(message) {
+      toast.textContent = message
+      toast.classList.add('visible')
+      window.clearTimeout(toastTimer)
+      toastTimer = window.setTimeout(() => toast.classList.remove('visible'), 1500)
+    }
+
+    async function copyText(value) {
+      try {
+        await navigator.clipboard.writeText(value)
+        showToast('已复制')
+      } catch {
+        const textarea = document.createElement('textarea')
+        textarea.value = value
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        textarea.remove()
+        showToast('已复制')
+      }
+    }
+
+    document.querySelectorAll('[data-copy-code]').forEach((button) => {
+      button.addEventListener('click', () => {
+        copyText(button.closest('.code-shell').querySelector('code').innerText)
+      })
+    })
+
+    document.querySelectorAll('[data-copy-target]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const target = document.querySelector(button.dataset.copyTarget)
+        if (target) copyText(target.textContent.trim())
+      })
+    })
+
+    const sections = [...document.querySelectorAll('.doc-section')]
+    const navLinks = [...document.querySelectorAll('.nav-link')]
+
+    searchInput.addEventListener('input', () => {
+      const query = searchInput.value.trim().toLowerCase()
+      let visibleCount = 0
+
+      sections.forEach((section) => {
+        const haystack = `${section.dataset.search || ''} ${section.textContent}`.toLowerCase()
+        const visible = !query || haystack.includes(query)
+        section.hidden = !visible
+        if (visible) visibleCount += 1
+      })
+
+      navLinks.forEach((link) => {
+        const target = document.querySelector(link.getAttribute('href'))
+        link.parentElement.hidden = Boolean(target && target.hidden)
+      })
+
+      emptyState.classList.toggle('visible', visibleCount === 0)
+    })
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting && !entry.target.hidden)
+        .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
+
+      if (!visible) return
+      navLinks.forEach((link) => {
+        link.classList.toggle('active', link.getAttribute('href') === `#${visible.target.id}`)
+      })
+    }, { rootMargin: '-20% 0px -68% 0px', threshold: [0.01, 0.2, 0.6] })
+
+    sections.forEach((section) => observer.observe(section))
+    renderIcons()
+  </script>
+</body>
+</html>

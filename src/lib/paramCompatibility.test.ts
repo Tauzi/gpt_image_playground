@@ -6,8 +6,14 @@ import { getMianyunImageSize, getOutputImageLimitForSettings, normalizeParamsFor
 describe('parameter compatibility', () => {
   it('converts Mianyun ratios to exact-size presets within each tier limit', () => {
     expect(getMianyunImageSize('1K', '1:1')).toBe('1024x1024')
-    expect(getMianyunImageSize('1K', '3:2')).toBe('1248x832')
-    expect(getMianyunImageSize('1K', '2:3')).toBe('832x1248')
+    expect(getMianyunImageSize('1K', '5:4')).toBe('1280x1024')
+    expect(getMianyunImageSize('1K', '9:16')).toBe('576x1024')
+    expect(getMianyunImageSize('1K', '16:9')).toBe('1024x576')
+    expect(getMianyunImageSize('1K', '4:3')).toBe('1024x768')
+    expect(getMianyunImageSize('1K', '3:2')).toBe('1536x1024')
+    expect(getMianyunImageSize('1K', '4:5')).toBe('1024x1280')
+    expect(getMianyunImageSize('1K', '3:4')).toBe('768x1024')
+    expect(getMianyunImageSize('1K', '2:3')).toBe('1024x1536')
     expect(getMianyunImageSize('1K', '21:9')).toBe('1456x624')
     expect(getMianyunImageSize('2K', '1:1')).toBe('2048x2048')
     expect(getMianyunImageSize('2K', '5:4')).toBe('2560x2048')

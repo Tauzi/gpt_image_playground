@@ -3,22 +3,27 @@ import { calculateImageSize } from './size'
 
 describe('calculateImageSize', () => {
   it('uses common 16:9 display resolutions for the built-in tiers', () => {
-    expect(calculateImageSize('1K', '16:9')).toBe('1344x752')
+    expect(calculateImageSize('1K', '16:9')).toBe('1024x576')
     expect(calculateImageSize('2K', '16:9')).toBe('2048x1152')
     expect(calculateImageSize('4K', '16:9')).toBe('3840x2160')
   })
 
-  it('uses exact-size presets within the 1K pixel limit', () => {
-    expect(calculateImageSize('1K', '1:1')).toBe('1024x1024')
-    expect(calculateImageSize('1K', '3:2')).toBe('1248x832')
-    expect(calculateImageSize('1K', '2:3')).toBe('832x1248')
-    expect(calculateImageSize('1K', '21:9')).toBe('1456x624')
+  it('uses the documented exact-size presets for the 1K tier', () => {
+    const expected = {
+      '1:1': '1024x1024',
+      '5:4': '1280x1024',
+      '9:16': '576x1024',
+      '21:9': '1456x624',
+      '16:9': '1024x576',
+      '4:3': '1024x768',
+      '3:2': '1536x1024',
+      '4:5': '1024x1280',
+      '3:4': '768x1024',
+      '2:3': '1024x1536',
+    }
 
-    for (const ratio of ['1:1', '3:2', '2:3', '16:9', '9:16', '4:3', '3:4', '21:9']) {
-      const [width, height] = calculateImageSize('1K', ratio)!.split('x').map(Number)
-      expect(width % 16).toBe(0)
-      expect(height % 16).toBe(0)
-      expect(width * height).toBeLessThanOrEqual(1_048_576)
+    for (const [ratio, size] of Object.entries(expected)) {
+      expect(calculateImageSize('1K', ratio)).toBe(size)
     }
   })
 

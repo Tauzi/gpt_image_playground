@@ -6,18 +6,21 @@ import ViewportTooltip from './ViewportTooltip'
 const SIZE_LIMIT_TEXT = '精确尺寸会原样发送，必须满足：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，并符合当前分辨率档位的像素预算。'
 const DEFAULT_RATIOS = [
   { label: '1:1', value: '1:1' },
-  { label: '3:2', value: '3:2' },
-  { label: '2:3', value: '2:3' },
-  { label: '16:9', value: '16:9' },
+  { label: '5:4', value: '5:4' },
   { label: '9:16', value: '9:16' },
-  { label: '4:3', value: '4:3' },
-  { label: '3:4', value: '3:4' },
   { label: '21:9', value: '21:9' },
+  { label: '16:9', value: '16:9' },
+  { label: '4:3', value: '4:3' },
+  { label: '3:2', value: '3:2' },
+  { label: '4:5', value: '4:5' },
+  { label: '3:4', value: '3:4' },
+  { label: '2:3', value: '2:3' },
 ]
 const TWO_K_RATIOS = [
   { label: '1:1', value: '1:1' },
   { label: '5:4', value: '5:4' },
   { label: '9:16', value: '9:16' },
+  { label: '21:9', value: '21:9' },
   { label: '16:9', value: '16:9' },
   { label: '4:3', value: '4:3' },
   { label: '3:2', value: '3:2' },
