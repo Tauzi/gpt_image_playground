@@ -1005,7 +1005,7 @@ describe('callImageApi', () => {
         activeProfileId: 'mianyun-async',
       },
       prompt: 'prompt',
-      params: { ...DEFAULT_PARAMS, resolution: '2K', size: '1:1' },
+      params: { ...DEFAULT_PARAMS, resolution: '2K', size: '3:2' },
       inputImageDataUrls: [],
     })).resolves.toEqual({ images: ['data:image/png;base64,aW1hZ2U='] })
 
@@ -1013,7 +1013,7 @@ describe('callImageApi', () => {
       model: 'gpt-image-2-2k-async',
       prompt: 'prompt',
       async: true,
-      size: '2048x2048',
+      size: '3072x2048',
       quality: 'auto',
       n: 1,
     })

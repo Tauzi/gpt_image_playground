@@ -7,7 +7,9 @@ const MIN_PIXELS = 655_360
 const MAX_PIXELS = 8_294_400
 
 export type SizeTier = '1K' | '2K' | '4K'
-type PresetRatio = '1:1' | '3:2' | '2:3' | '16:9' | '9:16' | '4:3' | '3:4' | '21:9'
+type PresetRatio = '1:1' | '5:4' | '3:2' | '2:3' | '16:9' | '9:16' | '4:3' | '3:4' | '4:5' | '21:9'
+
+const PRESET_RATIOS = new Set<PresetRatio>(['1:1', '5:4', '3:2', '2:3', '16:9', '9:16', '4:3', '3:4', '4:5', '21:9'])
 
 function roundToMultiple(value: number, multiple: number) {
   return Math.max(multiple, Math.round(value / multiple) * multiple)
@@ -156,7 +158,7 @@ export function formatImageRatio(width: number, height: number) {
  */
 const TIER_PIXEL_BUDGET: Record<SizeTier, number> = {
   '1K': 1_048_576,   // 1024 × 1024
-  '2K': 4_194_304,   // 2048 × 2048
+  '2K': 6_291_456,   // 3072 × 2048
   '4K': MAX_PIXELS,  // 8_294_400
 }
 
@@ -164,7 +166,7 @@ const TIER_PIXEL_BUDGET: Record<SizeTier, number> = {
  * 常用比例优先使用官方示例或通用显示标准，避免按像素预算计算出不常见尺寸。
  * 其中 21:9 的常见显示器尺寸会按 16 倍数约束做轻微规整。
  */
-const COMMON_SIZE_PRESETS: Record<SizeTier, Record<PresetRatio, string>> = {
+const COMMON_SIZE_PRESETS: Record<SizeTier, Partial<Record<PresetRatio, string>>> = {
   '1K': {
     '1:1': '1024x1024',
     '3:2': '1248x832',
@@ -177,12 +179,14 @@ const COMMON_SIZE_PRESETS: Record<SizeTier, Record<PresetRatio, string>> = {
   },
   '2K': {
     '1:1': '2048x2048',
-    '3:2': '2160x1440',
-    '2:3': '1440x2160',
-    '16:9': '2560x1440',
-    '9:16': '1440x2560',
+    '5:4': '2560x2048',
+    '9:16': '1152x2048',
+    '16:9': '2048x1152',
     '4:3': '2048x1536',
+    '3:2': '3072x2048',
+    '4:5': '2048x2560',
     '3:4': '1536x2048',
+    '2:3': '2048x3072',
     '21:9': '2560x1088',
   },
   '4K': {
@@ -201,14 +205,14 @@ function getPresetRatioKey(ratioWidth: number, ratioHeight: number): PresetRatio
   if (!Number.isInteger(ratioWidth) || !Number.isInteger(ratioHeight)) return null
 
   const directKey = `${ratioWidth}:${ratioHeight}`
-  if (directKey in COMMON_SIZE_PRESETS['1K']) return directKey as PresetRatio
+  if (PRESET_RATIOS.has(directKey as PresetRatio)) return directKey as PresetRatio
 
   const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b)
   const divisor = gcd(ratioWidth, ratioHeight)
   const key = `${ratioWidth / divisor}:${ratioHeight / divisor}`
 
   if (key === '7:3') return '21:9'
-  return key in COMMON_SIZE_PRESETS['1K'] ? key as PresetRatio : null
+  return PRESET_RATIOS.has(key as PresetRatio) ? key as PresetRatio : null
 }
 
 const MAX_RATIO_ERROR = 0.01
@@ -219,7 +223,8 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
 
   const { width: ratioWidth, height: ratioHeight } = parsed
   const presetRatioKey = getPresetRatioKey(ratioWidth, ratioHeight)
-  if (presetRatioKey) return COMMON_SIZE_PRESETS[tier][presetRatioKey]
+  const presetSize = presetRatioKey ? COMMON_SIZE_PRESETS[tier][presetRatioKey] : undefined
+  if (presetSize) return presetSize
 
   const targetRatio = ratioWidth / ratioHeight
   const pixelBudget = TIER_PIXEL_BUDGET[tier]

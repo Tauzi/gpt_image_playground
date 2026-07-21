@@ -3,9 +3,8 @@ import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } fro
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
-const TIERS: SizeTier[] = ['1K', '2K', '4K']
 const SIZE_LIMIT_TEXT = '精确尺寸会原样发送，必须满足：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，并符合当前分辨率档位的像素预算。'
-const RATIOS = [
+const DEFAULT_RATIOS = [
   { label: '1:1', value: '1:1' },
   { label: '3:2', value: '3:2' },
   { label: '2:3', value: '2:3' },
@@ -15,6 +14,21 @@ const RATIOS = [
   { label: '3:4', value: '3:4' },
   { label: '21:9', value: '21:9' },
 ]
+const TWO_K_RATIOS = [
+  { label: '1:1', value: '1:1' },
+  { label: '5:4', value: '5:4' },
+  { label: '9:16', value: '9:16' },
+  { label: '16:9', value: '16:9' },
+  { label: '4:3', value: '4:3' },
+  { label: '3:2', value: '3:2' },
+  { label: '4:5', value: '4:5' },
+  { label: '3:4', value: '3:4' },
+  { label: '2:3', value: '2:3' },
+]
+
+function getRatioOptions(tier: SizeTier) {
+  return tier === '2K' ? TWO_K_RATIOS : DEFAULT_RATIOS
+}
 
 interface Props {
   currentSize: string
@@ -32,13 +46,11 @@ function parseSize(size: string) {
   return { width: match[1], height: match[2] }
 }
 
-function findPresetForSize(size: string) {
+function findPresetForSize(size: string, tier: SizeTier) {
   const normalized = normalizeImageSize(size)
-  for (const tier of TIERS) {
-    for (const ratio of RATIOS) {
-      if (calculateImageSize(tier, ratio.value) === normalized) {
-        return { tier, ratio: ratio.value }
-      }
+  for (const ratio of getRatioOptions(tier)) {
+    if (calculateImageSize(tier, ratio.value) === normalized) {
+      return { ratio: ratio.value }
     }
   }
   return null
@@ -70,7 +82,9 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
     mouseDownTargetRef.current = null
   }
 
-  const currentPreset = findPresetForSize(currentSize)
+  const tier = resolution
+  const ratioOptions = getRatioOptions(tier)
+  const currentPreset = findPresetForSize(currentSize, tier)
   const currentParsedSize = parseSize(currentSize)
   const currentRatio = parseRatio(currentSize)
   const [mode, setMode] = useState<Mode>(() => {
@@ -81,9 +95,8 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
   })
 
   // Ratio mode state
-  const tier = resolution
   const currentRatioValue = currentRatio ? `${currentRatio.width}:${currentRatio.height}` : null
-  const [ratio, setRatio] = useState(RATIOS.some((item) => item.value === currentRatioValue) ? currentRatioValue! : currentRatio ? 'custom' : currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+  const [ratio, setRatio] = useState(ratioOptions.some((item) => item.value === currentRatioValue) ? currentRatioValue! : currentRatio ? 'custom' : currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
   const [customRatio, setCustomRatio] = useState(currentRatioValue ?? '16:9')
 
   // Resolution mode state
@@ -253,7 +266,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">图像比例</div>
                   <div className="grid grid-cols-4 gap-2">
-                    {RATIOS.map((item) => {
+                    {ratioOptions.map((item) => {
                       const [w, h] = item.value.split(':').map(Number)
                       const isHorizontal = w > h
                       const isSquare = w === h

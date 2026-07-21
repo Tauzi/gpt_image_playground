@@ -26,7 +26,7 @@ const MIANYUN_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MIANYUN_MAX_INPUT_IMAGES = 9
 const MIANYUN_MAX_PIXELS = {
   '1K': 1_048_576,
-  '2K': 4_194_304,
+  '2K': 6_291_456,
   '4K': 8_294_400,
 } as const
 
