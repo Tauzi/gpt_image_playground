@@ -177,6 +177,8 @@
 
 点击上方按钮导入仓库即可，Vercel 会自动执行构建并部署静态文件。
 
+当前 `vercel.json` 同时配置了 `/api-proxy/*` Serverless 代理，前端请求不会直接暴露上游地址。默认上游为 `https://vip.mianyunai.com/v1`，也可以在 Vercel 项目环境变量中设置 `API_PROXY_URL` 覆盖；修改环境变量后需要重新部署。
+
 **配置默认 API URL**：在 Vercel 项目的 **Settings → Environment Variables** 中添加 `VITE_DEFAULT_API_URL`（如 `https://api.openai.com/v1`），然后重新部署即可生效。
 
 **携带默认配置参数**：`VITE_DEFAULT_API_URL` 支持通过 URL 查询参数预设默认配置，可用参数参考下方的：“URL 传参快速填充”：`apiUrl`、`apiKey`、`apiMode`、`model`、`profileName`、`codexCli`、`streamImages`、`streamPartialImages`。

@@ -1011,20 +1011,8 @@ export default function InputBar() {
   }, [setParams, setSettings, settings])
 
   const handleResolutionChange = useCallback((resolution: ImageResolution) => {
-    if (resolution === '1K' || settings.imageGenerationMode === 'async') {
-      applyResolution(resolution)
-      return
-    }
-    setConfirmDialog({
-      title: '同步生成可能超时',
-      message: `${resolution} 分辨率生成耗时较长，建议使用异步模式。你仍然可以继续使用同步模式，但请求可能因连接超时而失败。`,
-      icon: 'info',
-      buttons: [
-        { label: '改用异步', action: () => applyResolution(resolution, 'async') },
-        { label: '仍用同步', tone: 'warning', action: () => applyResolution(resolution, 'sync') },
-      ],
-    })
-  }, [applyResolution, setConfirmDialog, settings.imageGenerationMode])
+    applyResolution(resolution)
+  }, [applyResolution])
 
   const showNLimitHint = useCallback(() => {
     nLimitHint.show()

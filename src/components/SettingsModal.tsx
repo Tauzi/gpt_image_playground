@@ -633,19 +633,7 @@ export default function SettingsModal() {
   }
 
   const updateImageGenerationMode = (mode: ImageGenerationMode) => {
-    if (mode !== 'sync' || params.resolution === '1K') {
-      applyImageGenerationMode(mode)
-      return
-    }
-    setConfirmDialog({
-      title: '同步生成可能超时',
-      message: `${params.resolution} 分辨率生成耗时较长，建议继续使用异步模式。同步请求可能因连接超时而失败。`,
-      confirmText: '仍使用同步',
-      cancelText: '保持异步',
-      tone: 'warning',
-      icon: 'info',
-      action: () => applyImageGenerationMode('sync'),
-    })
+    applyImageGenerationMode(mode)
   }
 
   const updateImageApiKey = (apiKey: string, commit = false) => {
