@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "prefix": "/api-proxy",
-  "target": "https://vip.mianyunai.com/v1",
+  "target": "http://127.0.0.1:3000",
   "changeOrigin": true,
-  "secure": true
+  "secure": false
 }

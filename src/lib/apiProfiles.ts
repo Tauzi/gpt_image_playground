@@ -42,7 +42,7 @@ export const DEFAULT_OPENAI_PROFILE_ID = 'default-openai'
 export const DEFAULT_API_TIMEOUT = 600
 export const MIANYUN_SYNC_PROVIDER_ID = 'custom-gpt-image-2-sync'
 export const MIANYUN_ASYNC_PROVIDER_ID = 'custom-gpt-image-2-async'
-export const MIANYUN_BASE_URL = 'https://vip.mianyunai.com/v1'
+export const MIANYUN_BASE_URL = 'https://mianyunai.com/v1'
 const MIANYUN_SYNC_PROFILE_ID = 'default-mianyun-sync'
 const MIANYUN_ASYNC_PROFILE_ID = 'default-mianyun-async'
 
@@ -643,20 +643,17 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     const asyncProvider = Boolean(provider.poll || provider.submit.taskIdPath || provider.editSubmit?.taskIdPath)
     return asyncProvider === (imageGenerationMode === 'async')
   })
-  const modeProfile = matchingCustomProfile
+  const modeProfile = matchingCustomProfile ?? (imageGenerationMode === 'sync'
+    ? rawProfiles.find((profile) => profile.provider === 'openai' && profile.apiMode === 'images')
+    : undefined)
   const activeProfileId = modeProfile?.id ?? storedActiveProfileId
   const profiles = modeProfile
     ? rawProfiles.map((profile) => profile.id === modeProfile.id
       ? {
           ...profile,
-          model: isMianyunImageProvider(profile.provider) || [
-            DEFAULT_IMAGES_MODEL,
-            DEFAULT_ASYNC_IMAGES_MODEL,
-            DEFAULT_2K_IMAGES_MODEL,
-            DEFAULT_4K_IMAGES_MODEL,
-          ].includes(profile.model)
-            ? getImageModelForResolution(imageGenerationMode, '1K')
-            : profile.model,
+          model: profile.model === DEFAULT_2K_IMAGES_MODEL || profile.model === DEFAULT_4K_IMAGES_MODEL
+            ? profile.model
+            : getImageModelForResolution(imageGenerationMode, '1K'),
         }
       : profile)
     : rawProfiles
@@ -990,7 +987,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   apiProxy: DEFAULT_OPENAI_API_PROXY,
   streamImages: DEFAULT_API_URL_PATCH?.streamImages ?? getDefaultStreamImages('openai', DEFAULT_API_URL_PATCH?.apiMode ?? 'images'),
   streamPartialImages: DEFAULT_API_URL_PATCH?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
-  imageGenerationMode: 'sync',
+  imageGenerationMode: 'async',
   customProviders: [],
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
@@ -1011,20 +1008,14 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
 })
 
 export function ensureMianyunSettings(input: Partial<AppSettings> | unknown): AppSettings {
-  const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
-  const current = normalizeSettings({
-    ...record,
-    imageGenerationMode: record.imageGenerationMode === 'async' ? 'async' : 'sync',
-  })
+  const current = normalizeSettings(input)
   const customProviders = [
     ...current.customProviders,
     ...MIANYUN_DEFAULT_PROVIDERS.filter((provider) => !current.customProviders.some((item) => item.id === provider.id)),
   ]
   const sharedApiKey = current.profiles.find((profile) => isMianyunImageProvider(profile.provider) && profile.apiKey.trim())?.apiKey
     ?? current.apiKey.trim()
-  const profiles = current.profiles.map((profile) => isMianyunImageProvider(profile.provider)
-    ? { ...profile, baseUrl: MIANYUN_BASE_URL, apiMode: 'images' as const, apiProxy: profile.provider === MIANYUN_SYNC_PROVIDER_ID ? true : profile.apiProxy }
-    : profile)
+  const profiles = [...current.profiles]
 
   for (const mode of ['sync', 'async'] as const) {
     const providerId = mode === 'async' ? MIANYUN_ASYNC_PROVIDER_ID : MIANYUN_SYNC_PROVIDER_ID
@@ -1045,7 +1036,7 @@ export function ensureMianyunSettings(input: Partial<AppSettings> | unknown): Ap
       model: getImageModelForResolution(mode, '1K'),
       apiMode: 'images',
       codexCli: false,
-      apiProxy: mode === 'sync',
+      apiProxy: false,
       responseFormatB64Json: false,
       streamImages: false,
       streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,

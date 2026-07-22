@@ -18,8 +18,7 @@ function loadDevProxyConfig() {
 }
 
 export default defineConfig(({ command }) => {
-  const isVitest = process.env.VITEST === 'true' || process.env.NODE_ENV === 'test'
-  const devProxyConfig = command === 'serve' && !isVitest ? loadDevProxyConfig() : null
+  const devProxyConfig = command === 'serve' ? loadDevProxyConfig() : null
 
   return {
     plugins: [react()],

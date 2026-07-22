@@ -22,10 +22,10 @@ FROM nginx:alpine
 ENV HOST=0.0.0.0
 ENV PORT=80
 ENV DEFAULT_API_URL=
-ENV API_PROXY_URL=https://vip.mianyunai.com/v1
-ENV ENABLE_API_PROXY=true
-ENV LOCK_API_PROXY=true
-ENV SHOW_DEFAULT_CONFIG_ONLY=true
+ENV API_PROXY_URL=
+ENV ENABLE_API_PROXY=false
+ENV LOCK_API_PROXY=false
+ENV SHOW_DEFAULT_CONFIG_ONLY=false
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY deploy/nginx.conf /etc/nginx/templates/default.conf.template

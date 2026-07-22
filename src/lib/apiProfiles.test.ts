@@ -8,12 +8,8 @@ import {
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_SETTINGS,
-  MIANYUN_BASE_URL,
-  MIANYUN_DEFAULT_SETTINGS,
-  MIANYUN_SYNC_PROVIDER_ID,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
-  ensureMianyunSettings,
   getActiveApiProfile,
   getImageModelForResolution,
   findEquivalentApiProfile,
@@ -473,7 +469,7 @@ describe('custom providers', () => {
     ])
   })
 
-  it('defaults to the sync profile and switches models with generation mode', () => {
+  it('defaults to the async profile and switches models with generation mode', () => {
     const settings = normalizeSettings({
       customProviders: [
         {
@@ -501,7 +497,7 @@ describe('custom providers', () => {
           provider: 'custom-sync',
           baseUrl: 'https://api.example.com/v1',
           apiKey: 'key',
-          model: DEFAULT_ASYNC_IMAGES_MODEL,
+          model: 'legacy-sync-model',
         },
         {
           id: 'profile-async',
@@ -509,55 +505,23 @@ describe('custom providers', () => {
           provider: 'custom-async',
           baseUrl: 'https://api.example.com/v1',
           apiKey: 'key',
-          model: DEFAULT_IMAGES_MODEL,
+          model: 'legacy-async-model',
         },
       ],
       activeProfileId: 'profile-sync',
-      imageGenerationMode: 'sync',
     })
 
-    expect(settings.imageGenerationMode).toBe('sync')
-    expect(settings.activeProfileId).toBe('profile-sync')
-    expect(getActiveApiProfile(settings).model).toBe(DEFAULT_IMAGES_MODEL)
+    expect(settings.imageGenerationMode).toBe('async')
+    expect(settings.activeProfileId).toBe('profile-async')
+    expect(getActiveApiProfile(settings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
 
-    const asyncSettings = normalizeSettings({ ...settings, imageGenerationMode: 'async' })
-    expect(asyncSettings.activeProfileId).toBe('profile-async')
-    expect(getActiveApiProfile(asyncSettings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
-
-    const syncSettings = normalizeSettings({ ...asyncSettings, imageGenerationMode: 'sync' })
+    const syncSettings = normalizeSettings({ ...settings, imageGenerationMode: 'sync' })
     expect(syncSettings.activeProfileId).toBe('profile-sync')
     expect(getActiveApiProfile(syncSettings).model).toBe(DEFAULT_IMAGES_MODEL)
-  })
 
-  it('uses the direct VIP Mianyun endpoint for the default sync profile', () => {
-    expect(MIANYUN_BASE_URL).toBe('https://vip.mianyunai.com/v1')
-    expect(DEFAULT_SETTINGS.imageGenerationMode).toBe('sync')
-    expect(MIANYUN_DEFAULT_SETTINGS.profiles.find((profile) => profile.provider === MIANYUN_SYNC_PROVIDER_ID)?.baseUrl).toBe(MIANYUN_BASE_URL)
-  })
-
-  it('migrates persisted Mianyun profiles to the VIP endpoint', () => {
-    const migrated = ensureMianyunSettings({
-      imageGenerationMode: 'sync',
-      customProviders: [{
-        id: MIANYUN_SYNC_PROVIDER_ID,
-        name: '绵云同步',
-        submit: { path: 'images/generations' },
-      }],
-      profiles: [{
-        id: 'legacy-mianyun-sync',
-        name: '绵云旧地址',
-        provider: MIANYUN_SYNC_PROVIDER_ID,
-        baseUrl: 'https://mianyunai.com/v1',
-        apiKey: 'test-key',
-        model: DEFAULT_IMAGES_MODEL,
-        apiMode: 'images',
-      }],
-    })
-
-    expect(migrated.profiles.find((profile) => profile.id === 'legacy-mianyun-sync')).toMatchObject({
-      baseUrl: MIANYUN_BASE_URL,
-      apiProxy: true,
-    })
+    const asyncSettings = normalizeSettings({ ...syncSettings, imageGenerationMode: 'async' })
+    expect(asyncSettings.activeProfileId).toBe('profile-async')
+    expect(getActiveApiProfile(asyncSettings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
   })
 
   it('normalizes custom provider definitions and keeps custom profiles', () => {
