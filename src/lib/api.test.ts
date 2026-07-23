@@ -1013,7 +1013,7 @@ describe('callImageApi', () => {
       model: 'gpt-image-2-2k-async',
       prompt: 'prompt',
       async: true,
-      size: '3072x2048',
+      size: '2064x1376',
       quality: 'auto',
       n: 1,
     })

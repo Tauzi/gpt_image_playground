@@ -6,9 +6,30 @@ export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
 export const MAX_FAL_OUTPUT_IMAGES = 4
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
 
+const LEGACY_MIANYUN_SIZE_MAP: Record<string, string> = {
+  '1K:1280x1024': '1040x832',
+  '1K:1024x576': '1280x720',
+  '1K:1024x768': '1344x1024',
+  '1K:1024x1280': '832x1040',
+  '1K:1456x624': '1344x576',
+  '2K:2560x2048': '2080x1664',
+  '2K:3072x2048': '2064x1376',
+  '2K:2048x2560': '1664x2080',
+  '2K:2048x3072': '1376x2064',
+  '2K:2560x1088': '2016x864',
+  '4K:3456x2304': '3504x2336',
+  '4K:2304x3456': '2336x3504',
+  '4K:3200x2400': '3264x2448',
+  '4K:2400x3200': '2448x3264',
+  '4K:3840x1600': '3808x1632',
+}
+
 export function getMianyunImageSize(resolution: TaskParams['resolution'], size: string) {
   const trimmed = size.trim()
-  if (/^\d+\s*[xX×]\s*\d+$/.test(trimmed)) return trimmed.replace(/\s*[xX×]\s*/, 'x')
+  if (/^\d+\s*[xX×]\s*\d+$/.test(trimmed)) {
+    const exact = trimmed.replace(/\s*[xX×]\s*/, 'x')
+    return LEGACY_MIANYUN_SIZE_MAP[`${resolution}:${exact}`] ?? exact
+  }
   const ratio = trimmed && trimmed !== 'auto' && parseRatio(trimmed) ? trimmed : '1:1'
   return calculateImageSize(resolution, ratio) ?? calculateImageSize(resolution, '1:1') ?? '1024x1024'
 }
