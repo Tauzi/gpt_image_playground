@@ -922,7 +922,7 @@
         </div>
       </section>
 
-      <section id="quickstart" class="doc-section" data-search="快速开始 curl token authorization 1024 quality low">
+      <section id="quickstart" class="doc-section" data-search="快速开始 curl token authorization 1024 quality high">
         <h2>快速开始</h2>
         <p class="section-copy">下面的请求会生成一张 1024 × 1024 图片。请将示例密钥替换为你的 API 用户令牌。</p>
 
@@ -936,15 +936,11 @@
     "model": "gpt-image-2",
     "prompt": "一只坐在窗边的橘猫，柔和自然光，真实摄影风格",
     "size": "1024x1024",
-    "quality": "low",
+    "quality": "high",
     "n": 1
   }'</code></pre>
         </div>
 
-        <div class="callout warning">
-          <strong>模型名称</strong>
-          <code class="inline-code">model</code> 固定填写 <code class="inline-code">gpt-image-2</code>，不要添加 <code class="inline-code">-low</code>、<code class="inline-code">-2k</code> 或 <code class="inline-code">-4k</code> 后缀。
-        </div>
       </section>
 
       <section id="parameters" class="doc-section" data-search="请求参数 model prompt size quality n response_format user">
@@ -960,7 +956,7 @@
               <tr><td><code>model</code></td><td>string</td><td>是</td><td>-</td><td>固定填写 <code>gpt-image-2</code></td></tr>
               <tr><td><code>prompt</code></td><td>string</td><td>是</td><td>-</td><td>图片生成提示词</td></tr>
               <tr><td><code>size</code></td><td>string</td><td>否</td><td><code>1024x1024</code></td><td>直接传递推荐像素尺寸，例如 <code>1024x1024</code> 或 <code>2048x1152</code></td></tr>
-              <tr><td><code>quality</code></td><td>string</td><td>否</td><td><code>low</code></td><td>支持 <code>low</code>、<code>medium</code>、<code>high</code></td></tr>
+              <tr><td><code>quality</code></td><td>string</td><td>否</td><td><code>high</code></td><td>支持 <code>low</code>、<code>medium</code>、<code>high</code></td></tr>
               <tr><td><code>n</code></td><td>integer</td><td>否</td><td><code>1</code></td><td>生成数量，多张支持情况取决于上游</td></tr>
               <tr><td><code>response_format</code></td><td>string</td><td>否</td><td>上游决定</td><td>常见值为 <code>url</code> 或 <code>b64_json</code></td></tr>
               <tr><td><code>user</code></td><td>string</td><td>否</td><td>-</td><td>可选的终端用户标识</td></tr>
@@ -974,12 +970,12 @@
           <div class="ratio-item">medium</div>
           <div class="ratio-item">high</div>
         </div>
-        <p class="section-copy">未传递质量时默认使用 <code class="inline-code">low</code>。</p>
+        <p class="section-copy">未传递质量时默认使用 <code class="inline-code">high</code>。</p>
       </section>
 
       <section id="sizes" class="doc-section" data-search="尺寸与比例 1k 2k size 1:1 5:4 9:16 21:9 16:9 4:3 3:2 4:5 3:4 2:3">
         <h2>尺寸与比例</h2>
-        <p class="section-copy">优先使用下表中的推荐尺寸。21:9 建议通过 <code class="inline-code">size</code> 与服务端支持的比例组合明确指定。</p>
+        <p class="section-copy">优先使用下表中的推荐尺寸，尺寸值直接填写到 <code class="inline-code">size</code> 字段。</p>
 
         <div class="segmented" role="tablist" aria-label="分辨率尺寸表" data-tabs="sizes">
           <button class="segment-button active" type="button" role="tab" aria-selected="true" data-tab="1k">1K</button>
@@ -992,15 +988,16 @@
               <thead><tr><th>比例</th><th>推荐尺寸</th><th>说明</th></tr></thead>
               <tbody>
                 <tr><td>1:1</td><td><code>1024x1024</code></td><td>方图</td></tr>
-                <tr><td>5:4</td><td><code>1280x1024</code></td><td>横向产品图</td></tr>
-                <tr><td>9:16</td><td><code>576x1024</code></td><td>竖屏内容</td></tr>
-                <tr><td>21:9</td><td><code>1k + 21:9</code></td><td>使用显式参数</td></tr>
-                <tr><td>16:9</td><td><code>1024x576</code></td><td>横屏封面</td></tr>
+                <tr><td>5:4</td><td><code>1040x832</code></td><td>横向产品图</td></tr>
+                <tr><td>9:16</td><td><code>720x1280</code></td><td>竖屏内容</td></tr>
+                <tr><td>21:9</td><td><code>1344x576</code></td><td>超宽</td></tr>
+                <tr><td>9:21</td><td><code>576x1344</code></td><td>超竖</td></tr>
+                <tr><td>16:9</td><td><code>1280x720</code></td><td>横屏封面</td></tr>
                 <tr><td>4:3</td><td><code>1024x768</code></td><td>标准横图</td></tr>
-                <tr><td>3:2</td><td><code>1536x1024</code></td><td>摄影比例</td></tr>
-                <tr><td>4:5</td><td><code>1024x1280</code></td><td>竖向海报</td></tr>
+                <tr><td>3:2</td><td><code>1008x672</code></td><td>摄影比例</td></tr>
+                <tr><td>4:5</td><td><code>832x1040</code></td><td>竖向海报</td></tr>
                 <tr><td>3:4</td><td><code>768x1024</code></td><td>标准竖图</td></tr>
-                <tr><td>2:3</td><td><code>1024x1536</code></td><td>摄影竖图</td></tr>
+                <tr><td>2:3</td><td><code>672x1008</code></td><td>摄影竖图</td></tr>
               </tbody>
             </table>
           </div>
@@ -1012,15 +1009,16 @@
               <thead><tr><th>比例</th><th>推荐尺寸</th><th>说明</th></tr></thead>
               <tbody>
                 <tr><td>1:1</td><td><code>2048x2048</code></td><td>2K 方图</td></tr>
-                <tr><td>5:4</td><td><code>2560x2048</code></td><td>横向产品图</td></tr>
+                <tr><td>5:4</td><td><code>2080x1664</code></td><td>横向产品图</td></tr>
                 <tr><td>9:16</td><td><code>1152x2048</code></td><td>2K 竖屏</td></tr>
-                <tr><td>21:9</td><td><code>2k + 21:9</code></td><td>使用显式参数</td></tr>
+                <tr><td>21:9</td><td><code>2016x864</code></td><td>超宽</td></tr>
+                <tr><td>9:21</td><td><code>864x2016</code></td><td>超竖</td></tr>
                 <tr><td>16:9</td><td><code>2048x1152</code></td><td>2K 横屏</td></tr>
                 <tr><td>4:3</td><td><code>2048x1536</code></td><td>标准横图</td></tr>
-                <tr><td>3:2</td><td><code>3072x2048</code></td><td>摄影横图</td></tr>
-                <tr><td>4:5</td><td><code>2048x2560</code></td><td>竖向海报</td></tr>
+                <tr><td>3:2</td><td><code>2064x1376</code></td><td>摄影横图</td></tr>
+                <tr><td>4:5</td><td><code>1664x2080</code></td><td>竖向海报</td></tr>
                 <tr><td>3:4</td><td><code>1536x2048</code></td><td>标准竖图</td></tr>
-                <tr><td>2:3</td><td><code>2048x3072</code></td><td>摄影竖图</td></tr>
+                <tr><td>2:3</td><td><code>1376x2064</code></td><td>摄影竖图</td></tr>
               </tbody>
             </table>
           </div>
@@ -1032,6 +1030,7 @@
           <div class="ratio-item">5:4</div>
           <div class="ratio-item">9:16</div>
           <div class="ratio-item">21:9</div>
+          <div class="ratio-item">9:21</div>
           <div class="ratio-item">16:9</div>
           <div class="ratio-item">4:3</div>
           <div class="ratio-item">3:2</div>
@@ -1042,7 +1041,7 @@
 
         <div class="callout">
           <strong>尺寸字段</strong>
-          所有示例均通过 <code class="inline-code">size</code> 传递尺寸；需要 21:9 时按接口实际支持的组合值填写。
+          所有示例均通过 <code class="inline-code">size</code> 传递精确尺寸。
         </div>
       </section>
 
