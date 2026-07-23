@@ -7,6 +7,10 @@ export const MAX_FAL_OUTPUT_IMAGES = 4
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
 
 const LEGACY_MIANYUN_SIZE_MAP: Record<string, string> = {
+  '1K:1536x1024': '1008x672',
+  '1K:1024x1536': '672x1008',
+  '1K:1344x1024': '1024x768',
+  '1K:1024x1344': '768x1024',
   '1K:1280x1024': '1040x832',
   '1K:1024x576': '1280x720',
   '1K:1024x768': '1344x1024',
