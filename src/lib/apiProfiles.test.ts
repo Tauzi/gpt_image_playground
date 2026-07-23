@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_ASYNC_IMAGES_MODEL,
   DEFAULT_2K_IMAGES_MODEL,
+  DEFAULT_2K_SYNC_IMAGES_MODEL,
   DEFAULT_4K_IMAGES_MODEL,
   DEFAULT_FAL_BASE_URL,
   DEFAULT_FAL_MODEL,
@@ -431,6 +432,7 @@ describe('custom providers', () => {
     expect(getImageModelForResolution('async', '1K')).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
     expect(getImageModelForResolution('sync', '1K')).toBe(DEFAULT_IMAGES_MODEL)
     expect(getImageModelForResolution('async', '2K')).toBe(DEFAULT_2K_IMAGES_MODEL)
+    expect(getImageModelForResolution('sync', '2K')).toBe(DEFAULT_2K_SYNC_IMAGES_MODEL)
     expect(getImageModelForResolution('async', '4K')).toBe(DEFAULT_4K_IMAGES_MODEL)
   })
 

@@ -34,6 +34,7 @@ const DEFAULT_BASE_URL = DEFAULT_API_URL_PATCH?.baseUrl ?? ''
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_ASYNC_IMAGES_MODEL = 'gpt-image-2-async'
 export const DEFAULT_2K_IMAGES_MODEL = 'gpt-image-2-2k-async'
+export const DEFAULT_2K_SYNC_IMAGES_MODEL = 'gpt-image-2-2k'
 export const DEFAULT_4K_IMAGES_MODEL = 'gpt-image-2-4k-async'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
@@ -98,7 +99,7 @@ export function isMianyunImageProvider(provider: ApiProvider) {
 }
 
 export function getImageModelForResolution(mode: ImageGenerationMode, resolution: ImageResolution) {
-  if (resolution === '2K') return DEFAULT_2K_IMAGES_MODEL
+  if (resolution === '2K') return mode === 'sync' ? DEFAULT_2K_SYNC_IMAGES_MODEL : DEFAULT_2K_IMAGES_MODEL
   if (resolution === '4K') return DEFAULT_4K_IMAGES_MODEL
   return mode === 'async' ? DEFAULT_ASYNC_IMAGES_MODEL : DEFAULT_IMAGES_MODEL
 }
@@ -651,7 +652,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? rawProfiles.map((profile) => profile.id === modeProfile.id
       ? {
           ...profile,
-          model: profile.model === DEFAULT_2K_IMAGES_MODEL || profile.model === DEFAULT_4K_IMAGES_MODEL
+          model: profile.model === DEFAULT_2K_IMAGES_MODEL || profile.model === DEFAULT_2K_SYNC_IMAGES_MODEL || profile.model === DEFAULT_4K_IMAGES_MODEL
             ? profile.model
             : getImageModelForResolution(imageGenerationMode, '1K'),
         }
