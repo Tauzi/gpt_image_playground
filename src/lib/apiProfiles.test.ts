@@ -11,12 +11,14 @@ import {
   DEFAULT_SETTINGS,
   createDefaultOpenAIProfile,
   createDefaultFalProfile,
+  ensureMianyunSettings,
   getActiveApiProfile,
   getImageModelForResolution,
   findEquivalentApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
   mergeImportedSettings,
+  MIANYUN_BASE_URL,
   normalizeCustomProviderDefinition,
   normalizeSettings,
   switchApiProfileProvider,
@@ -524,6 +526,22 @@ describe('custom providers', () => {
     const asyncSettings = normalizeSettings({ ...syncSettings, imageGenerationMode: 'async' })
     expect(asyncSettings.activeProfileId).toBe('profile-async')
     expect(getActiveApiProfile(asyncSettings).model).toBe(DEFAULT_ASYNC_IMAGES_MODEL)
+  })
+
+  it('forces built-in image profiles to use the configured service URL after restoring cached settings', () => {
+    const seeded = ensureMianyunSettings(DEFAULT_SETTINGS)
+    const restored = ensureMianyunSettings({
+      ...seeded,
+      profiles: seeded.profiles.map((profile) => profile.provider.startsWith('custom-gpt-image-2-')
+        ? { ...profile, baseUrl: 'https://old.example.com/v1' }
+        : profile,
+      ),
+    })
+
+    expect(restored.profiles
+      .filter((profile) => profile.provider.startsWith('custom-gpt-image-2-'))
+      .map((profile) => profile.baseUrl),
+    ).toEqual([MIANYUN_BASE_URL, MIANYUN_BASE_URL])
   })
 
   it('normalizes custom provider definitions and keeps custom profiles', () => {

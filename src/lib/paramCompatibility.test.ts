@@ -29,8 +29,14 @@ describe('parameter compatibility', () => {
     expect(getMianyunImageSize('1K', 'auto')).toBe('1024x1024')
   })
 
-  it('keeps Mianyun exact sizes unchanged', () => {
-    expect(getMianyunImageSize('1K', '1024x1024')).toBe('1024x1024')
+  it('keeps current Mianyun preset sizes stable when normalized repeatedly', () => {
+    const ratios = ['1:1', '5:4', '9:16', '21:9', '9:21', '16:9', '4:3', '3:2', '4:5', '3:4', '2:3']
+    for (const resolution of ['1K', '2K', '4K'] as const) {
+      for (const ratio of ratios) {
+        const size = getMianyunImageSize(resolution, ratio)
+        expect(getMianyunImageSize(resolution, size), `${resolution} ${ratio}`).toBe(size)
+      }
+    }
   })
 
   it('limits OpenAI output count to 10', () => {

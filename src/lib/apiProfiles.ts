@@ -1044,9 +1044,10 @@ export function ensureMianyunSettings(input: Partial<AppSettings> | unknown): Ap
     })
   }
 
-  const syncedProfiles = sharedApiKey
-    ? profiles.map((profile) => isMianyunImageProvider(profile.provider) ? { ...profile, apiKey: sharedApiKey } : profile)
-    : profiles
+  const syncedProfiles = profiles.map((profile) => isMianyunImageProvider(profile.provider)
+    ? { ...profile, baseUrl: MIANYUN_BASE_URL, ...(sharedApiKey ? { apiKey: sharedApiKey } : {}) }
+    : profile,
+  )
   const targetProvider = current.imageGenerationMode === 'sync' ? MIANYUN_SYNC_PROVIDER_ID : MIANYUN_ASYNC_PROVIDER_ID
   const activeProfileId = syncedProfiles.find((profile) => profile.provider === targetProvider)?.id ?? current.activeProfileId
   return normalizeSettings({ ...current, customProviders, profiles: syncedProfiles, activeProfileId })
