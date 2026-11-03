@@ -1,11 +1,16 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
+export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
 export type ImageGenerationMode = 'sync' | 'async'
 export type ImageResolution = '1K' | '2K' | '4K'
+/** 绵云可选的模型系列，实际模型 ID 由系列 + 同步/异步 + 分辨率拼出 */
+export const MIANYUN_MODEL_FAMILIES = ['gpt-image-2', 'gpt-image-2.5'] as const
+export type MianyunModelFamily = typeof MIANYUN_MODEL_FAMILIES[number]
+export const DEFAULT_MIANYUN_MODEL_FAMILY: MianyunModelFamily = 'gpt-image-2'
 export type AppMode = 'gallery' | 'agent'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
-export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
   'task-selection',
   'favorite-collection-selection',
@@ -16,11 +21,13 @@ export const ZIP_DOWNLOAD_ROUTE_VALUES = [
 ] as const
 export type ZipDownloadRoute = typeof ZIP_DOWNLOAD_ROUTE_VALUES[number]
 export const DEFAULT_ZIP_DOWNLOAD_ROUTES: ZipDownloadRoute[] = ['task-selection', 'favorite-collection-selection']
-export type BuiltInApiProvider = 'openai' | 'fal'
+export type BuiltInApiProvider = 'openai' | 'sb2api-async' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
 export const DEFAULT_STREAM_PARTIAL_IMAGES = 1
 export const DEFAULT_AGENT_MAX_TOOL_ROUNDS = 15
+/** 接口允许的参考图数量上限 */
+export const MAX_INPUT_IMAGES = 16
 
 export type CustomProviderRequestMethod = 'GET' | 'POST'
 export type CustomProviderContentType = 'json' | 'multipart'
@@ -71,20 +78,71 @@ export interface CustomProviderDefinition {
 
 export interface ApiProfile {
   id: string
+  /** 当前部署指定的默认预置配置。 */
+  isDefault?: boolean
   name: string
+  /** 预置配置的 Markdown 说明。 */
+  description?: string
   provider: ApiProvider
   baseUrl: string
   apiKey: string
+  /** 模型 ID 列表，多个模型以 `, ` 分隔 */
   model: string
+  /** 首页选中的模型；不在列表中时回退到第一个 */
+  selectedModel?: string
+  imageGenerationModel?: string
   timeout: number
   apiMode: ApiMode
+  reasoningEffort?: ReasoningEffort
   codexCli: boolean
   apiProxy: boolean
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  transparentBackgroundMethod: 'api' | 'local'
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'imageGenerationModel' | 'apiMode' | 'reasoningEffort' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages' | 'transparentBackgroundMethod'>>>>
 }
+
+export interface PresetAgentConfig {
+  apiConfigMode?: AgentApiConfigMode
+  textProfileId?: string
+  imageProfileId?: string
+}
+
+export interface PresetConfig {
+  customProviders: CustomProviderDefinition[]
+  profiles: ApiProfile[]
+  agent?: PresetAgentConfig
+}
+
+/** 参考图预览中“编辑图片”按钮的默认行为 */
+export type ReferenceImageEditAction = 'ask' | 'sketch' | 'mask'
+
+/** 仅客户端：下载和导出时每次询问保存位置，还是直接保存到默认保存地址 */
+export type SaveLocationMode = 'ask' | 'default'
+
+/** 重试任务时新建任务，还是覆盖原任务 */
+export type RetryMode = 'new' | 'overwriteFailed' | 'overwriteAll'
+
+/** 字体选择：default 表示使用部署默认（VITE_DEFAULT_UI_FONT / VITE_DEFAULT_MONO_FONT）；builtin 为内置字体，加载来源由 VITE_BUILTIN_FONT_SOURCE 决定 */
+export type FontMode = 'default' | 'builtin' | 'system' | 'custom'
+export type ColorMode = 'system' | 'light' | 'dark'
+
+/** 打开画板的请求：baseImageSrc 为空时是空白画板，replaceImageId 表示完成后替换该参考图 */
+export interface SketchBoardRequest {
+  baseImageSrc: string | null
+  replaceImageId?: string
+}
+
+/** 正在进行的批量提交进度 */
+export interface BatchProgress {
+  total: number
+  started: number
+  finished: number
+}
+
+/** 批量提交模式：排队逐条执行，或按并发数同时执行 */
+export type BatchPromptMode = 'queue' | 'concurrent'
 
 export interface AppSettings {
   /** 旧版单配置字段：保留用于导入/查询参数兼容，实际请求以 active profile 为准 */
@@ -98,17 +156,45 @@ export interface AppSettings {
   streamImages?: boolean
   streamPartialImages?: number
   imageGenerationMode: ImageGenerationMode
+  /** 绵云模型系列，如 gpt-image-2 / gpt-image-2.5 */
+  imageModelFamily: MianyunModelFamily
   customProviders: CustomProviderDefinition[]
   providerOrder?: string[]
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  /** 在收藏夹页新建的任务自动加入当前收藏夹 */
+  saveTasksToActiveFavoriteCollection: boolean
+  retryMode: RetryMode
   allowPromptRewrite: boolean
   taskCompletionNotification: boolean
+  /** 启动时检查 GitHub 上的新版本 */
+  autoCheckUpdate: boolean
+  /** 仅客户端：把警告和错误写入日志文件 */
+  writeLogFile: boolean
   enterSubmit: boolean
+  /** 切换隐私模式的快捷键，如 Ctrl+Shift+H；空字符串表示禁用 */
+  privacyModeShortcut: string
+  colorMode: ColorMode
+  uiFont: FontMode
+  /** uiFont 为 custom 时使用的本机字体名称 */
+  uiFontName: string
+  monoFont: FontMode
+  /** monoFont 为 custom 时使用的本机字体名称 */
+  monoFontName: string
+  /** 偏好设置：是否在首页提供多提示词批量提交 */
+  showBatchPrompt: boolean
+  /** 多提示词批量提交，提示词之间空两行分隔 */
+  batchPromptEnabled: boolean
+  batchPromptMode: BatchPromptMode
+  /** 并发模式下是否限制并发数（默认开启），关闭时全部同时提交 */
+  batchPromptConcurrencyLimited: boolean
+  batchPromptConcurrency: number
   referenceImageEditAction: ReferenceImageEditAction
   zipDownloadRoutes: ZipDownloadRoute[]
+  /** 仅客户端：默认保存地址本身由 Rust 侧保存，不在设置中 */
+  saveLocationMode: SaveLocationMode
   agentScrollToBottomAfterSubmit: boolean
   agentMaxToolRounds: number
   agentWebSearch: boolean
@@ -125,7 +211,7 @@ export interface AppSettings {
 export interface TaskParams {
   size: string
   resolution: ImageResolution
-  quality: 'auto' | 'low' | 'medium' | 'high'
+  quality: 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   output_format: 'png' | 'jpeg' | 'webp'
   output_compression: number | null
   moderation: 'auto' | 'low'
@@ -153,10 +239,25 @@ export interface InputImage {
   dataUrl: string
 }
 
+/** 参考图上的评论标注，x / y 为相对原图宽高的比例（0~1） */
+export interface ImageComment {
+  x: number
+  y: number
+  text: string
+}
+
 export interface MaskDraft {
   targetImageId: string
   maskDataUrl: string
   updatedAt: number
+}
+
+export interface AgentInputDraft {
+  prompt: string
+  inputImages: InputImage[]
+  maskDraft: MaskDraft | null
+  maskEditorImageId: string | null
+  updatedAt?: number
 }
 
 // ===== 任务记录 =====
@@ -220,6 +321,8 @@ export interface TaskRecord {
   status: TaskStatus
   error: string | null
   createdAt: number
+  /** 本次生成开始时间，重试时不改变原始创建时间 */
+  startedAt?: number
   finishedAt: number | null
   /** 总耗时毫秒 */
   elapsed: number | null
@@ -239,6 +342,8 @@ export interface TaskRecord {
   agentToolCallId?: string
   /** Agent 批量图像工具调用 ID */
   agentBatchCallId?: string
+  /** Agent 批量图像工具中的稳定条目 ID */
+  agentBatchItemId?: string
   /** Agent 图像工具实际动作 */
   agentToolAction?: 'generate' | 'edit' | 'auto' | string
 }
@@ -346,6 +451,17 @@ export interface ImageApiResponse {
   n?: number
 }
 
+export interface ResponsesInputContentItem {
+  type?: string
+  text?: string
+  image_url?: string
+  file_id?: string
+  file_url?: string
+  file_data?: string
+  filename?: string
+  detail?: string
+}
+
 export interface ResponsesOutputItem {
   id?: string
   type?: string
@@ -357,8 +473,8 @@ export interface ResponsesOutputItem {
   name?: string
   /** function_call: JSON-encoded arguments string */
   arguments?: string
-  /** function_call_output: JSON/text output string */
-  output?: string
+  /** function_call_output: JSON/text string or Responses input content */
+  output?: string | ResponsesInputContentItem[]
   annotations?: Array<{
     type?: string
     start_index?: number
@@ -369,6 +485,7 @@ export interface ResponsesOutputItem {
   content?: Array<{
     type?: string
     text?: string
+    refusal?: string
     annotations?: Array<{
       type?: string
       start_index?: number
@@ -377,7 +494,7 @@ export interface ResponsesOutputItem {
       title?: string
     }>
   }>
-  result?: string | {
+  result?: string | null | {
     b64_json?: string
     base64?: string
     image?: string
@@ -434,7 +551,7 @@ export interface ExportData {
     index: number
     total: number
   }
-  settings?: AppSettings
+  settings?: Omit<AppSettings, 'customProviders'> & { customProviders?: CustomProviderDefinition[] }
   tasks?: TaskRecord[]
   favoriteCollections?: FavoriteCollection[]
   defaultFavoriteCollectionId?: string | null
@@ -446,6 +563,8 @@ export interface ExportData {
     source?: 'upload' | 'generated' | 'mask'
     width?: number
     height?: number
+    /** 通过链接添加时的原链接 */
+    sourceUrl?: string
   }>
   /** imageId → 缩略图信息 */
   thumbnailFiles?: Record<string, {

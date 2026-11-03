@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { TaskRecord, FavoriteCollection } from '../../types'
 import {
-  ALL_FAVORITES_COLLECTION_ID,
   deleteFavoriteCollection,
   renameFavoriteCollection,
   useStore,
 } from '../../store'
+import { ALL_FAVORITES_COLLECTION_ID } from '../../lib/favoriteState'
+import { getPageScrollTop } from '../../lib/pageScroll'
 import { useDragSelect } from '../../hooks/useDragSelect'
 import { FavoriteIcon } from '../icons'
 import { FavoriteCollectionOverviewCard } from './FavoriteCollectionOverviewCard'
@@ -27,17 +28,17 @@ export function FavoriteCollectionsView() {
   const suppressClickUntilRef = useRef(0)
   
   const cards = useMemo<CollectionCard[]>(() => {
-    const allTasks = getCollectionTasks(ALL_FAVORITES_COLLECTION_ID, tasks)
+    const allTasks = getCollectionTasks(ALL_FAVORITES_COLLECTION_ID, tasks, defaultFavoriteCollectionId)
     return [
       { id: ALL_FAVORITES_COLLECTION_ID, name: '全部', tasks: allTasks },
       ...collections.map((collection) => ({
         id: collection.id,
         name: collection.name,
         collection,
-        tasks: getCollectionTasks(collection.id, tasks),
+        tasks: getCollectionTasks(collection.id, tasks, defaultFavoriteCollectionId),
       })),
     ]
-  }, [collections, tasks])
+  }, [collections, defaultFavoriteCollectionId, tasks])
 
   const filteredCards = useMemo(() => {
     if (!searchQuery.trim()) return cards
@@ -168,7 +169,7 @@ export function FavoriteCollectionsView() {
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
-            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
+            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - getPageScrollTop(),
             width: Math.abs(selectionBox.currentPageX - selectionBox.startPageX),
             height: Math.abs(selectionBox.currentPageY - selectionBox.startPageY),
           }}

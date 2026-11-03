@@ -1,4 +1,4 @@
-import { getActiveApiProfile, getCustomProviderDefinition, getImageModelForResolution, isMianyunImageProvider } from './apiProfiles'
+import { getActiveApiProfile, getCustomProviderDefinition, getMianyunImageModel, isMianyunImageProvider } from './apiProfiles'
 import { callFalAiImageApi } from './falAiImageApi'
 import { callOpenAICompatibleImageApi } from './openaiCompatibleImageApi'
 import type { CallApiOptions, CallApiResult } from './imageApiShared'
@@ -14,7 +14,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     ? { ...opts, params: { ...opts.params, size: getMianyunImageSize(opts.params.resolution, opts.params.size) } }
     : opts
   const profile = isMianyun
-    ? { ...activeProfile, model: getImageModelForResolution(opts.settings.imageGenerationMode, requestOpts.params.resolution) }
+    ? { ...activeProfile, model: getMianyunImageModel(opts.settings.imageModelFamily, opts.settings.imageGenerationMode, requestOpts.params.resolution) }
     : activeProfile
   if (profile.provider === 'fal') return callFalAiImageApi(requestOpts, profile)
 

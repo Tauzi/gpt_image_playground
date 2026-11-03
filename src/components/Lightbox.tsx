@@ -1,9 +1,14 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useStore, getCachedImage, ensureImageCached } from '../store'
+import type { ImageComment } from '../types'
+import { createInputImageFromFile, deleteImageIfUnreferenced, useStore } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
+import { ensureImageCached, getCachedImage } from '../lib/imageCache'
+import { getImageComments } from '../lib/promptImageMentions'
+import { CommentPin } from './CommentMarks'
+import { EditIcon, RefreshIcon } from './icons'
 
 const MIN_SCALE = 1
 const MAX_SCALE = 10
@@ -24,6 +29,17 @@ export default function Lightbox() {
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
+  const inputImages = useStore((s) => s.inputImages)
+  const lightboxCommentPrompt = useStore((s) => s.lightboxCommentPrompt)
+  const replaceInputImage = useStore((s) => s.replaceInputImage)
+  const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const setSketchBoard = useStore((s) => s.setSketchBoard)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
+  const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
+  const showToast = useStore((s) => s.showToast)
+  const replaceFileInputRef = useRef<HTMLInputElement>(null)
+  const replaceImageTargetRef = useRef<string | null>(null)
 
   const [src, setSrc] = useState('')
   const [maskImageSrc, setMaskImageSrc] = useState('')
@@ -124,11 +140,120 @@ export default function Lightbox() {
   const goTo = useCallback((idx: number) => {
     if (lightboxImageList.length === 0) return
     const wrapped = ((idx % lightboxImageList.length) + lightboxImageList.length) % lightboxImageList.length
-    setLightboxImageId(lightboxImageList[wrapped], lightboxImageList)
-  }, [lightboxImageList, setLightboxImageId])
+    setLightboxImageId(lightboxImageList[wrapped], lightboxImageList, lightboxCommentPrompt)
+  }, [lightboxCommentPrompt, lightboxImageList, setLightboxImageId])
 
   const goPrev = useCallback(() => { if (showNav) goTo(currentIndex - 1) }, [showNav, currentIndex, goTo])
   const goNext = useCallback(() => { if (showNav) goTo(currentIndex + 1) }, [showNav, currentIndex, goTo])
+
+  const isInputImage = Boolean(lightboxImageId && inputImages.some((image) => image.id === lightboxImageId))
+
+  const openReplaceFilePicker = useCallback(() => {
+    if (!lightboxImageId || !isInputImage) return
+    replaceImageTargetRef.current = lightboxImageId
+    replaceFileInputRef.current?.click()
+  }, [isInputImage, lightboxImageId])
+
+  const handleReplaceFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    const targetId = replaceImageTargetRef.current
+    replaceImageTargetRef.current = null
+    if (!file || !targetId) return
+
+    try {
+      const image = await createInputImageFromFile(file)
+      if (!image) {
+        showToast('请选择有效图片', 'error')
+        return
+      }
+
+      const currentImages = useStore.getState().inputImages
+      const targetIdx = currentImages.findIndex((item) => item.id === targetId)
+      if (targetIdx < 0) {
+        void deleteImageIfUnreferenced(image.id)
+        showToast('原参考图已不存在', 'error')
+        return
+      }
+      if (targetId === image.id) {
+        showToast('参考图未变化', 'info')
+        return
+      }
+      if (currentImages.some((item, idx) => idx !== targetIdx && item.id === image.id)) {
+        showToast('这张图片已在参考图中', 'info')
+        return
+      }
+
+      replaceInputImage(targetIdx, image)
+      const nextList = lightboxImageList.map((id) => id === targetId ? image.id : id)
+      setLightboxImageId(image.id, nextList, lightboxCommentPrompt)
+      showToast('参考图已替换', 'success')
+    } catch (err) {
+      showToast(`参考图替换失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  }, [lightboxCommentPrompt, lightboxImageList, replaceInputImage, setLightboxImageId, showToast])
+
+  const editInputImage = useCallback(() => {
+    if (!lightboxImageId || !isInputImage || !src) return
+    const imageId = lightboxImageId
+    const baseImageSrc = src
+
+    // 已是遮罩主图时继续编辑遮罩
+    if (maskDraft?.targetImageId === imageId) {
+      close()
+      setMaskEditorImageId(imageId)
+      return
+    }
+
+    const openSketch = () => {
+      close()
+      setSketchBoard({ baseImageSrc, replaceImageId: imageId })
+    }
+    const openMask = () => {
+      if (maskDraft) {
+        showToast('只能有一张遮罩图，请先移除现有遮罩', 'info')
+        return
+      }
+      close()
+      setMaskEditorImageId(imageId)
+    }
+    const remember = (choice: 'sketch' | 'mask', checked?: boolean) => {
+      if (checked) setSettings({ referenceImageEditAction: choice })
+    }
+
+    if (settings.referenceImageEditAction === 'sketch') {
+      openSketch()
+      return
+    }
+    if (settings.referenceImageEditAction === 'mask') {
+      openMask()
+      return
+    }
+
+    setConfirmDialog({
+      title: '编辑图片',
+      message: '画板可在图片上手绘、评论，标注修改意图；遮罩可指定需要重绘的区域。\n若勾选下方选项，之后可在「设置 → 习惯配置」中修改。',
+      checkbox: { label: '以后默认执行此选择' },
+      buttons: [
+        {
+          label: '遮罩',
+          tone: 'secondary',
+          action: (checked) => {
+            remember('mask', checked)
+            openMask()
+          },
+        },
+        {
+          label: '画板',
+          tone: 'primary',
+          action: (checked) => {
+            remember('sketch', checked)
+            openSketch()
+          },
+        },
+      ],
+    })
+  }, [close, isInputImage, lightboxImageId, maskDraft, setConfirmDialog, setMaskEditorImageId, setSettings, setSketchBoard, settings.referenceImageEditAction, showToast, src])
 
   // 键盘左右切换
   useEffect(() => {
@@ -143,23 +268,40 @@ export default function Lightbox() {
 
   if (!lightboxImageId || !src) return null
 
+  // 打开预览的入口（输入栏、任务详情、Agent 消息）会传入对应的提示词，图片在列表中的位置即其序号
+  const comments = lightboxCommentPrompt != null && currentIndex >= 0 ? getImageComments(lightboxCommentPrompt, currentIndex) : []
+
   return (
-    <LightboxInner
-      src={src}
-      imageId={lightboxImageId}
-      maskPreviewSrc={maskPreviewSrc}
-      onClose={close}
-      showNav={showNav}
-      currentIndex={currentIndex}
-      total={total}
-      onPrev={goPrev}
-      onNext={goNext}
-    />
+    <>
+      <LightboxInner
+        src={src}
+        comments={comments}
+        imageId={lightboxImageId}
+        maskPreviewSrc={maskPreviewSrc}
+        onClose={close}
+        showNav={showNav}
+        currentIndex={currentIndex}
+        total={total}
+        onPrev={goPrev}
+        onNext={goNext}
+        showInputActions={isInputImage}
+        onReplace={openReplaceFilePicker}
+        onEdit={editInputImage}
+      />
+      <input
+        ref={replaceFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleReplaceFileUpload}
+      />
+    </>
   )
 }
 
 interface LightboxInnerProps {
   src: string
+  comments: ImageComment[]
   imageId: string
   maskPreviewSrc?: string
   onClose: () => void
@@ -168,10 +310,13 @@ interface LightboxInnerProps {
   total: number
   onPrev: () => void
   onNext: () => void
+  showInputActions: boolean
+  onReplace: () => void
+  onEdit: () => void
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext }: LightboxInnerProps) {
+function LightboxInner({ src, comments, imageId, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, showInputActions, onReplace, onEdit }: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const openedAtRef = useRef(Date.now())
 
@@ -186,6 +331,17 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
 
   // 缩放倍率显示：2s 无操作后自动隐藏
   const [showZoomBadge, setShowZoomBadge] = useState(false)
+  // 点击评论气泡可收起 / 展开其文字，切换到其他图片时恢复全部展开
+  const [hiddenComments, setHiddenComments] = useState<{ imageId: string; indexes: number[] }>({ imageId, indexes: [] })
+  // 渲染期间发现图片已切换就直接重置，避免切回原图时沿用旧的收起状态，也不会闪一帧
+  if (hiddenComments.imageId !== imageId) setHiddenComments({ imageId, indexes: [] })
+  const hiddenCommentIndexes = hiddenComments.indexes
+  const toggleComment = (idx: number) => {
+    setHiddenComments({
+      imageId,
+      indexes: hiddenCommentIndexes.includes(idx) ? hiddenCommentIndexes.filter((item) => item !== idx) : [...hiddenCommentIndexes, idx],
+    })
+  }
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 拖拽状态
   const dragRef = useRef({
@@ -602,7 +758,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
   const zoomPercent = Math.round(s * 100)
 
   const navBtnClass =
-    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/40 text-white hover:bg-black/60 transition-all z-10 backdrop-blur-sm'
+    'absolute top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/80 text-gray-800 hover:bg-white dark:bg-black/40 dark:text-white dark:hover:bg-black/60 transition-all z-10 backdrop-blur-sm shadow-md border border-gray-200/50 dark:border-transparent'
 
   return (
     <div
@@ -613,7 +769,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
+      <div className="absolute inset-0 bg-black/35 dark:bg-black/70 backdrop-blur-md animate-fade-in" />
       <div className="relative animate-zoom-in">
         <div
           className="relative flex items-center justify-center"
@@ -626,7 +782,7 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
           <img
             src={src}
             data-image-id={imageId}
-            className="saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            className="saveable-image max-w-[90vw] max-h-[70vh] sm:max-w-[85vw] sm:max-h-[75vh] object-contain rounded-lg shadow-2xl"
             onDragStart={(e) => e.preventDefault()}
             alt=""
           />
@@ -637,6 +793,41 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
               alt=""
             />
           )}
+          {comments.map((comment, idx) => (
+            // 气泡尖角落在评论位置，并抵消外层缩放，保持屏幕上的大小不变；靠右的评论文字放到气泡左侧，避免伸出图片
+            <div
+              key={idx}
+              className="pointer-events-none absolute"
+              style={{
+                left: `${comment.x * 100}%`,
+                bottom: `${(1 - comment.y) * 100}%`,
+                transform: `scale(${1 / s})`,
+                transformOrigin: '0 100%',
+                transition: isDragging ? 'none' : 'transform 0.2s ease-out',
+              }}
+            >
+              {/* 用按钮承载气泡，触摸手势会把它识别为控件，点按不会关闭预览 */}
+              <button
+                type="button"
+                aria-label={hiddenCommentIndexes.includes(idx) ? `显示评论 ${idx + 1}` : `隐藏评论 ${idx + 1}`}
+                aria-pressed={!hiddenCommentIndexes.includes(idx)}
+                className="pointer-events-auto block cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleComment(idx)
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                <CommentPin index={idx} />
+              </button>
+              {/* 收起时向气泡一侧缩小淡出 */}
+              <span className={`absolute bottom-0 w-max max-w-[18rem] whitespace-pre-wrap break-words rounded-xl border border-gray-200/80 bg-white/95 px-3 py-2 text-sm leading-snug text-gray-800 shadow-lg backdrop-blur-md transition-[opacity,transform] duration-150 ease-out dark:border-white/[0.08] dark:bg-gray-800/95 dark:text-gray-100 ${
+                comment.x > 0.6 ? 'right-full mr-1.5 origin-bottom-right' : 'left-full ml-1.5 origin-bottom-left'
+              } ${hiddenCommentIndexes.includes(idx) ? 'scale-75 opacity-0' : 'scale-100 opacity-100'}`}>
+                {comment.text}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -662,17 +853,39 @@ function LightboxInner({ src, imageId, maskPreviewSrc, onClose, showNav, current
         </>
       )}
 
-      {/* 底部指示器 */}
+      {/* 参考图操作 */}
+      {showInputActions && !isZoomed && (
+        <div className="absolute bottom-8 left-1/2 z-10 flex w-max -translate-x-1/2 items-center gap-2 rounded-2xl bg-white/90 dark:bg-black/60 p-2 backdrop-blur-xl border border-gray-200/80 dark:border-white/15 shadow-2xl transition-colors" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-white/90 dark:hover:bg-white/15 transition active:scale-95"
+            onClick={onReplace}
+          >
+            <RefreshIcon className="w-4 h-4" />
+            <span>替换图片</span>
+          </button>
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-blue-500 px-5 py-2.5 text-sm font-medium text-white shadow-md transition hover:bg-blue-600 hover:shadow-blue-500/25 active:scale-95"
+            onClick={onEdit}
+          >
+            <EditIcon className="w-4 h-4" />
+            <span>编辑图片</span>
+          </button>
+        </div>
+      )}
+
+      {/* 指示器 */}
       {showZoomBadge && isZoomed && zoomPercent !== 100 && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm transition-opacity duration-500">
+          <span className="px-3 py-1.5 bg-white/90 dark:bg-black/50 text-gray-800 dark:text-white/80 text-xs rounded-full backdrop-blur-sm transition-opacity duration-500 border border-gray-200/80 dark:border-transparent">
             {zoomPercent}%
           </span>
         </div>
       )}
       {showNav && !isZoomed && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
-          <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm">
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-none z-10">
+          <span className="px-3 py-1 bg-white/90 dark:bg-black/60 text-gray-800 dark:text-white/90 text-sm font-medium rounded-full backdrop-blur-md shadow-lg border border-gray-200/80 dark:border-white/15">
             {currentIndex + 1} / {total}
           </span>
         </div>

@@ -1,39 +1,44 @@
+import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import type {
   AgentConversation,
+  AgentInputDraft,
   AgentMessage,
   AgentRound,
   ApiMode,
   ApiProfile,
   AppSettings,
+  BatchProgress,
+  PresetConfig,
   AppMode,
   TaskParams,
   InputImage,
   MaskDraft,
+  SketchBoardRequest,
   TaskRecord,
   FavoriteCollection,
-  ResponsesApiResponse,
   ResponsesOutputItem,
   StoredImage,
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, ensureMianyunSettings, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageModelForResolution, isMianyunImageProvider, mergeImportedSettings, MIANYUN_DEFAULT_SETTINGS, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, ensureMianyunSettings, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getMianyunImageModel, isMianyunImageProvider, mergeImportedSettings, mergePresetImportedSettings, MIANYUN_DEFAULT_SETTINGS, normalizeSettings, resolveApiProfileModel, splitModelList, validateApiProfile } from './lib/apiProfiles'
+import { enforcePresetConfigPolicy, getPresetConfig, getPresetProfileIds, getPresetProviderIds, isPresetConfigDeletionPrevented, isPresetConfigOnlyEnabled, isPresetConfigParamsLocked, isPresetProfile, isPresetProviderDeletionPrevented } from './lib/presetConfig'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
-import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { getTaskPromptText, remapImageMentionsForOrder, replaceImageMentionsForApi, stripImageMentionMarkers } from './lib/promptImageMentions'
 import {
-  CURRENT_THUMBNAIL_VERSION,
   getAllTasks,
   putTask as dbPutTask,
   deleteTask as dbDeleteTask,
+  commitTaskDeletion,
   clearTasks as dbClearTasks,
   getAllAgentConversations,
+  putAgentConversation as dbPutAgentConversation,
   replaceAgentConversations,
   clearAgentConversations as dbClearAgentConversations,
   getImage,
-  getImageThumbnail,
-  getStoredFreshImageThumbnail,
+  getStoredImageThumbnail,
   getAllImageIds,
   putImage,
   putImageThumbnail,
@@ -44,61 +49,56 @@ import {
 } from './lib/db'
 import { callImageApi } from './lib/api'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage } from './lib/agentApi'
-import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
+import { buildAgentApiInput, buildAgentContinuationInput } from './lib/agentInputBuilder'
+import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { IMAGE_FETCH_CORS_HINT, isHttpUrl } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
+import { runWithConcurrency, splitBatchPrompts } from './lib/batchPrompts'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
-import { hasActiveDataOperations } from './lib/dataOperations'
+import { cacheImage, cacheThumbnail, clearImageCaches, deleteCachedImage, deleteImageCacheEntry, ensureImageCached, scheduleMissingThumbnailBackfill } from './lib/imageCache'
+import { migrateImagesToBlob } from './lib/imageBlob'
+import { hasActiveDataOperations, isCustomRecoverableTask, isFalRecoverableTask } from './lib/dataOperations'
 import { formatExportFileTime } from './lib/exportFileName'
-import { buildExportZip, createExportBlob, getExportImageEstimatedBytes, getExportZipPlan, MAX_EXPORT_ZIP_BYTES, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './lib/exportZip'
+import { buildExportZip, createExportBlob, getExportZipPlan, MAX_EXPORT_ZIP_BYTES, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './lib/exportZip'
+import { getExportImageSizes, readExportImages } from './lib/exportImages'
+import { deleteAgentRoundFromConversation, getActiveAgentRounds, getAgentRoundPath, isEmptyAgentConversation, normalizeAgentConversations, remapAgentRoundMentionsForPathChange, uniqueIds } from './lib/agentConversationState'
+import { canonicalizeBatchFunctionCallArguments, countResponseToolCalls, createReadyAgentRecoveredToolState, getAgentFunctionOutputCallIds, getAgentRecoveredFailureError, getAgentRecoveredToolCallCount, getPersistableAgentConversations, getPersistableRawResponsePayload, mergeResponseOutputItems, scrubResponseOutputForDeletedAgentTasks, scrubTaskRawResponsePayloadForDeletedTasks } from './lib/agentResponseState'
+import { cleanStaleAgentInputDrafts, clearInputDraftState, isEmptyAgentInputDraft, normalizeAgentInputDrafts, remapAgentInputDraftMentionsForPathChange, restoreAgentInputDraftState, restoreGalleryInputDraftState, saveActiveAgentInputDrafts, saveGalleryInputDraft, syncActiveInputDraft, updateInputDraftImages } from './lib/inputDraftState'
+import { ALL_FAVORITES_COLLECTION_ID, DEFAULT_FAVORITE_COLLECTION_ID, createDefaultFavoriteCollection, deleteFavoriteCollectionState, ensureDefaultFavoriteCollection, getNewTaskFavoritePatch, getTaskFavoriteCollectionIds, mergeFavoriteCollections, normalizeFavoriteCollectionIds, normalizeFavoriteCollectionName, normalizeFavoriteCollections, normalizeFavoritePatch, normalizeLoadedFavoriteState, resolveDefaultFavoriteCollectionId, sameFavoriteCollectionIds } from './lib/favoriteState'
+import { createPersistedState, mergePersistedAgentConversations, migratePersistedState, normalizePersistedState } from './lib/persistedState'
+import { addImageSizeParam, createTaskDonePatch, createTaskErrorPatch, deriveAgentImageActualParams, deriveGalleryActualParams, firstActualParams, hasActualParams, hasActualSizeParam, mapActualParamsByImage, mapRevisedPromptsByImage, markInterruptedOpenAIRunningTasks } from './lib/taskState'
+import { stripInjectedCodexCliSizePrompt } from './lib/size'
+import { apiFetch, FetchConnectError, isTauri } from './lib/platform'
+import { pickSaveDir, saveFile, saveFileToDir, type SaveOptions } from './lib/saveFile'
+import { endDataProgress, setDataProgressCancelable, startDataProgress, updateDataProgress, useSettingsDataTransfer } from './lib/dataProgress'
+import { throwIfAborted } from './lib/serverSentEvents'
+import { tauriStorage } from './lib/tauriStorage'
+import { createPrivacyModeState, getPrivacySnapshotImageIds, isPrivacyHiddenConversation, isPrivacyHiddenTask, restorePrivacyInputState, type PrivacyModeState } from './lib/privacyMode'
 
-export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
-export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
-export const DEFAULT_FAVORITE_COLLECTION_NAME = '默认'
-
-// ===== Image cache =====
-// 内存缓存，id → dataUrl。只保留少量最近使用图片，避免大量 4K data URL 常驻内存。
-
-const imageCache = new Map<string, string>()
-const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()
-const thumbnailBackfillIds = new Map<string, 'visible' | 'background'>()
-const thumbnailBackfillRunningIds = new Set<string>()
-const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
-let thumbnailBackfillScheduled = false
-const MAX_IMAGE_CACHE_ENTRIES = 8
-const MAX_THUMBNAIL_CACHE_ENTRIES = 80
-const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
-const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
-const AGENT_ROUND_IMAGE_MENTION_RE = /@(?:第)?(\d+)轮图(\d+)/g
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const taskExecutions = new Map<string, symbol>()
 const agentRoundControllers = new Map<string, AbortController>()
 const agentRecoveryContinuations = new Set<string>()
+const deletedActiveAgentTasks = new Map<string, { task: TaskRecord; controller: AbortController }>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
-const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_RECOVERY_PAUSE_ERROR = 'AgentRecoveryPauseError'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
 type ToastType = 'info' | 'success' | 'error'
-type AgentInputDraft = {
-  prompt: string
-  inputImages: InputImage[]
-  maskDraft: MaskDraft | null
-  maskEditorImageId: string | null
-  updatedAt?: number
-}
+type AgentDeletionResult = 'deleted' | 'deleted-with-warning' | 'running' | 'not-found'
 
 export function getErrorToastMessage(message: string): string {
   const text = message.trim()
@@ -123,7 +123,7 @@ function isErrorToastTitle(title: string): boolean {
   return /(?:失败|错误|异常|报错|无法|不能|超时|中断|断开|请先|请输入|已达上限|不存在|已丢失)$/.test(title)
 }
 
-export type SettingsTab = 'general' | 'agent' | 'api' | 'data' | 'about'
+export type SettingsTab = 'general' | 'appearance' | 'agent' | 'skill' | 'api' | 'data' | 'about'
 
 const TIMEOUT_STREAMING_HINT = '也可尝试打开「流式传输」，并提高「请求中间步骤图像数」来维持连接。'
 const TIMEOUT_PARTIAL_IMAGES_ZERO_HINT = '官方流式接口不发送心跳，当前「请求中间步骤图像数」为 0，连接可能因无数据传输而断开。建议提高到 2 或 3。'
@@ -143,196 +143,6 @@ function createOpenAITimeoutError(timeoutSeconds: number, profile?: TimeoutStrea
   return `请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。${getTimeoutStreamingHint(profile)}`
 }
 
-export function getCachedImage(id: string): string | undefined {
-  const dataUrl = imageCache.get(id)
-  if (dataUrl) {
-    imageCache.delete(id)
-    imageCache.set(id, dataUrl)
-  }
-  return dataUrl
-}
-
-function cacheImage(id: string, dataUrl: string) {
-  imageCache.delete(id)
-  imageCache.set(id, dataUrl)
-  while (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
-    const oldestKey = imageCache.keys().next().value
-    if (oldestKey == null) break
-    imageCache.delete(oldestKey)
-  }
-}
-
-function getCachedThumbnail(id: string) {
-  const thumbnail = thumbnailCache.get(id)
-  if (thumbnail?.thumbnailVersion === CURRENT_THUMBNAIL_VERSION) {
-    thumbnailCache.delete(id)
-    thumbnailCache.set(id, thumbnail)
-    return thumbnail
-  }
-  if (thumbnail) {
-    thumbnailCache.delete(id)
-  }
-  return undefined
-}
-
-function cacheThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }) {
-  if (thumbnail.thumbnailVersion !== CURRENT_THUMBNAIL_VERSION) return
-  thumbnailCache.delete(id)
-  thumbnailCache.set(id, thumbnail)
-  while (thumbnailCache.size > MAX_THUMBNAIL_CACHE_ENTRIES) {
-    const oldestKey = thumbnailCache.keys().next().value
-    if (oldestKey == null) break
-    thumbnailCache.delete(oldestKey)
-  }
-}
-
-export async function ensureImageCached(id: string): Promise<string | undefined> {
-  const cached = getCachedImage(id)
-  if (cached) return cached
-  const rec = await getImage(id)
-  if (rec) {
-    cacheImage(id, rec.dataUrl)
-    return rec.dataUrl
-  }
-  return undefined
-}
-
-export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
-  const cached = getCachedThumbnail(id)
-  if (cached) return cached
-
-  const rec = await getStoredFreshImageThumbnail(id)
-  if (!rec?.thumbnailDataUrl) {
-    scheduleThumbnailBackfill([id], 'visible')
-    return undefined
-  }
-
-  const thumbnail = {
-    dataUrl: rec.thumbnailDataUrl,
-    width: rec.width,
-    height: rec.height,
-    thumbnailVersion: rec.thumbnailVersion,
-  }
-  cacheThumbnail(id, thumbnail)
-  return thumbnail
-}
-
-export function subscribeImageThumbnail(id: string, callback: (thumbnail: { dataUrl: string; width?: number; height?: number }) => void) {
-  let subscribers = thumbnailSubscribers.get(id)
-  if (!subscribers) {
-    subscribers = new Set()
-    thumbnailSubscribers.set(id, subscribers)
-  }
-  subscribers.add(callback)
-  return () => {
-    subscribers?.delete(callback)
-    if (subscribers?.size === 0) thumbnailSubscribers.delete(id)
-  }
-}
-
-function notifyImageThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number }) {
-  thumbnailSubscribers.get(id)?.forEach((callback) => callback(thumbnail))
-}
-
-function scheduleThumbnailBackfill(ids: Iterable<string>, priority: 'visible' | 'background' = 'background') {
-  for (const id of ids) {
-    if (getCachedThumbnail(id) || thumbnailBackfillRunningIds.has(id)) continue
-    const currentPriority = thumbnailBackfillIds.get(id)
-    if (!currentPriority || priority === 'visible') thumbnailBackfillIds.set(id, priority)
-  }
-  scheduleThumbnailBackfillTick()
-}
-
-function scheduleThumbnailBackfillTick() {
-  if (thumbnailBackfillScheduled || thumbnailBackfillIds.size === 0) return
-  thumbnailBackfillScheduled = true
-
-  const run = () => {
-    thumbnailBackfillScheduled = false
-    void processNextThumbnailBackfill()
-  }
-
-  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 2_000 })
-  } else {
-    globalThis.setTimeout(run, 250)
-  }
-}
-
-async function processNextThumbnailBackfill() {
-  if (thumbnailBackfillRunningIds.size > 0) return
-
-  const ids = await getNextThumbnailBackfillBatch()
-  for (const id of ids) startThumbnailBackfill(id)
-
-  if (thumbnailBackfillIds.size > 0) scheduleThumbnailBackfillTick()
-}
-
-async function getNextThumbnailBackfillBatch() {
-  const candidates = getOrderedThumbnailBackfillIds().slice(0, MAX_THUMBNAIL_BACKFILL_CONCURRENT)
-  if (candidates.length === 0) return []
-
-  const sizes = await Promise.all(candidates.map(async (id) => {
-    const image = await getImage(id)
-    return { width: image?.width, height: image?.height }
-  }))
-  const concurrency = getThumbnailConcurrencyForBatch(sizes)
-  const selected = candidates.slice(0, concurrency)
-  for (const id of selected) thumbnailBackfillIds.delete(id)
-  return selected
-}
-
-function getOrderedThumbnailBackfillIds() {
-  const visible: string[] = []
-  const background: string[] = []
-  for (const [id, priority] of thumbnailBackfillIds) {
-    if (priority === 'visible') visible.push(id)
-    else background.push(id)
-  }
-  return [...visible, ...background]
-}
-
-function getThumbnailConcurrencyForBatch(sizes: Array<{ width?: number; height?: number }>) {
-  let maxMegapixels = 0
-  for (const { width, height } of sizes) {
-    if (!width || !height) return 1
-    maxMegapixels = Math.max(maxMegapixels, (width * height) / 1_000_000)
-  }
-  const megapixels = maxMegapixels
-  if (megapixels >= 8) return 1
-  if (megapixels >= 4) return 2
-  if (megapixels >= 2) return 3
-  return 4
-}
-
-function startThumbnailBackfill(id: string) {
-  thumbnailBackfillRunningIds.add(id)
-
-  void (async () => {
-    if (getCachedThumbnail(id)) return
-
-    const thumbnail = await getImageThumbnail(id)
-    if (thumbnail?.thumbnailDataUrl) {
-      cacheThumbnail(id, {
-        dataUrl: thumbnail.thumbnailDataUrl,
-        width: thumbnail.width,
-        height: thumbnail.height,
-        thumbnailVersion: thumbnail.thumbnailVersion,
-      })
-      notifyImageThumbnail(id, {
-        dataUrl: thumbnail.thumbnailDataUrl,
-        width: thumbnail.width,
-        height: thumbnail.height,
-      })
-    }
-  })().catch(() => {
-    // Keep thumbnail generation best-effort; cards remain on placeholders if it fails.
-  }).finally(() => {
-    thumbnailBackfillRunningIds.delete(id)
-    scheduleThumbnailBackfillTick()
-  })
-}
-
 function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: string | null | undefined) {
   if (!maskTargetImageId) return images
   const maskIdx = images.findIndex((img) => img.id === maskTargetImageId)
@@ -343,17 +153,33 @@ function orderImagesWithMaskFirst(images: InputImage[], maskTargetImageId: strin
   return next
 }
 
-function isAgentTask(task: TaskRecord) {
+export function isAgentTask(task: TaskRecord) {
   return task.sourceMode === 'agent' || Boolean(task.agentConversationId || task.agentRoundId)
 }
 
-function showTaskCompletionNotification(title: string, body: string) {
+// 失败通知用独立 tag，避免与成功通知互相覆盖
+function showTaskCompletionNotification(title: string, body: string, tag = 'task-completion') {
   const settings = normalizeSettings(useStore.getState().settings)
   if (!settings.taskCompletionNotification) return
-  showBrowserNotification(title, { body })
+  showBrowserNotification(title, { body, tag })
 }
 
-function countSuccessfulOutputImages(tasks: TaskRecord[]) {
+// 隐私模式中丢弃进入前已开始的任务和对话的提示与通知，退出后也不补发
+function isTaskHiddenByPrivacyMode(task: TaskRecord) {
+  return isPrivacyHiddenTask(useStore.getState().privacyMode, task)
+}
+
+function isConversationHiddenByPrivacyMode(conversationId: string) {
+  return Boolean(useStore.getState().privacyMode?.hiddenConversationIds.has(conversationId))
+}
+
+function showTaskFailureNotification(task: TaskRecord) {
+  // Agent 任务由所在回合统一通知，批量任务在整批结束时汇总失败数量
+  if (isAgentTask(task) || batchTaskIds.has(task.id) || isTaskHiddenByPrivacyMode(task)) return
+  showTaskCompletionNotification('图像生成失败', '请回到应用查看详情。', 'task-failure')
+}
+
+export function countSuccessfulOutputImages(tasks: TaskRecord[]) {
   return tasks.reduce((count, task) => count + (task.status === 'done' && !isAgentTask(task) ? task.outputImages.length : 0), 0)
 }
 
@@ -396,99 +222,6 @@ function maybeOpenSupportPrompt(previousTasks: TaskRecord[], nextTasks: TaskReco
   }
 }
 
-function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-}
-
-function normalizeAgentRound(value: unknown, fallbackIndex: number): AgentRound | null {
-  if (!value || typeof value !== 'object') return null
-  const round = value as Partial<AgentRound>
-  if (typeof round.id !== 'string' || !round.id) return null
-  if (typeof round.userMessageId !== 'string' || !round.userMessageId) return null
-
-  const status = round.status === 'running'
-    ? 'error'
-    : round.status === 'error' || round.status === 'done'
-    ? round.status
-    : 'done'
-
-  return {
-    id: round.id,
-    index: typeof round.index === 'number' ? round.index : fallbackIndex + 1,
-    parentRoundId: typeof round.parentRoundId === 'string' ? round.parentRoundId : null,
-    userMessageId: round.userMessageId,
-    ...(typeof round.assistantMessageId === 'string' ? { assistantMessageId: round.assistantMessageId } : {}),
-    prompt: typeof round.prompt === 'string' ? round.prompt : '',
-    inputImageIds: normalizeStringArray(round.inputImageIds),
-    maskTargetImageId: typeof round.maskTargetImageId === 'string' ? round.maskTargetImageId : null,
-    maskImageId: typeof round.maskImageId === 'string' ? round.maskImageId : null,
-    outputTaskIds: normalizeStringArray(round.outputTaskIds),
-    ...(typeof round.responseId === 'string' ? { responseId: round.responseId } : {}),
-    ...(Array.isArray(round.responseOutput) ? { responseOutput: round.responseOutput } : {}),
-    status,
-    error: status === 'error'
-      ? typeof round.error === 'string' ? round.error : '上次请求已中断'
-      : null,
-    createdAt: typeof round.createdAt === 'number' ? round.createdAt : Date.now(),
-    finishedAt: typeof round.finishedAt === 'number' ? round.finishedAt : null,
-  }
-}
-
-function normalizeAgentMessage(value: unknown): AgentMessage | null {
-  if (!value || typeof value !== 'object') return null
-  const message = value as Partial<AgentMessage>
-  if (typeof message.id !== 'string' || !message.id) return null
-  if (message.role !== 'user' && message.role !== 'assistant') return null
-  if (typeof message.roundId !== 'string' || !message.roundId) return null
-
-  return {
-    id: message.id,
-    role: message.role,
-    content: typeof message.content === 'string' ? message.content : '',
-    roundId: message.roundId,
-    ...(Array.isArray(message.inputImageIds) ? { inputImageIds: normalizeStringArray(message.inputImageIds) } : {}),
-    maskTargetImageId: typeof message.maskTargetImageId === 'string' ? message.maskTargetImageId : null,
-    maskImageId: typeof message.maskImageId === 'string' ? message.maskImageId : null,
-    ...(Array.isArray(message.outputTaskIds) ? { outputTaskIds: normalizeStringArray(message.outputTaskIds) } : {}),
-    createdAt: typeof message.createdAt === 'number' ? message.createdAt : Date.now(),
-  }
-}
-
-function normalizeAgentConversations(value: unknown): AgentConversation[] {
-  if (!Array.isArray(value)) return []
-
-  return value
-    .filter((item): item is AgentConversation => Boolean(item) && typeof item === 'object' && typeof (item as AgentConversation).id === 'string')
-    .map((conversation) => {
-      const normalizedRounds = Array.isArray(conversation.rounds)
-        ? conversation.rounds.map(normalizeAgentRound).filter((round): round is AgentRound => Boolean(round))
-        : []
-      const hasBranchParents = normalizedRounds.some((round) => round.parentRoundId)
-      const hasStoredActiveRound = typeof conversation.activeRoundId === 'string'
-      const rounds = hasBranchParents || hasStoredActiveRound
-        ? normalizedRounds
-        : normalizedRounds.map((round, index) => ({
-            ...round,
-            parentRoundId: index > 0 ? normalizedRounds[index - 1].id : null,
-          }))
-      const roundIds = new Set(rounds.map((round) => round.id))
-      const messages = Array.isArray(conversation.messages)
-        ? conversation.messages
-            .map(normalizeAgentMessage)
-            .filter((message): message is AgentMessage => message != null && roundIds.has(message.roundId))
-        : []
-      return {
-        id: conversation.id,
-        title: typeof conversation.title === 'string' && conversation.title.trim() ? conversation.title : '新对话',
-        activeRoundId: typeof conversation.activeRoundId === 'string' && roundIds.has(conversation.activeRoundId) ? conversation.activeRoundId : rounds[rounds.length - 1]?.id ?? null,
-        createdAt: typeof conversation.createdAt === 'number' ? conversation.createdAt : Date.now(),
-        updatedAt: typeof conversation.updatedAt === 'number' ? conversation.updatedAt : Date.now(),
-        rounds,
-        messages,
-      }
-    })
-}
-
 function mergeImportedAgentConversations(current: AgentConversation[], imported: AgentConversation[]) {
   const merged = [...current]
   const indexes = new Map(merged.map((conversation, index) => [conversation.id, index]))
@@ -504,136 +237,6 @@ function mergeImportedAgentConversations(current: AgentConversation[], imported:
   }
 
   return merged
-}
-
-function mergeAgentConversationsForStorage(stored: AgentConversation[], legacy: AgentConversation[]) {
-  const merged = new Map<string, AgentConversation>()
-  for (const conversation of stored) merged.set(conversation.id, conversation)
-  for (const conversation of legacy) {
-    const existing = merged.get(conversation.id)
-    if (!existing || conversation.updatedAt >= existing.updatedAt) {
-      merged.set(conversation.id, conversation)
-    }
-  }
-  return [...merged.values()].sort((a, b) => a.createdAt - b.createdAt)
-}
-
-function getPersistableResponseOutputItem(item: ResponsesOutputItem): ResponsesOutputItem {
-  if (item.type !== 'image_generation_call' || item.result == null) return item
-
-  if (typeof item.result === 'string') {
-    const { result: _result, ...rest } = item
-    return rest
-  }
-
-  if (!isRecord(item.result)) return item
-  const { b64_json: _b64Json, base64: _base64, image: _image, data: _data, ...restResult } = item.result
-  if (Object.keys(restResult).length === 0) {
-    const { result: _result, ...rest } = item
-    return rest
-  }
-
-  return { ...item, result: restResult }
-}
-
-function getPersistableAgentConversations(conversations: AgentConversation[]): AgentConversation[] {
-  return conversations.map((conversation) => ({
-    ...conversation,
-    rounds: conversation.rounds.map((round) => round.responseOutput?.length
-      ? {
-          ...round,
-          responseOutput: round.responseOutput.map(getPersistableResponseOutputItem),
-        }
-      : round,
-    ),
-  }))
-}
-
-function stripPersistedAgentConversations(value: unknown): unknown {
-  if (!Array.isArray(value)) return value
-  return value.map((conversation) => {
-    if (!isRecord(conversation) || !Array.isArray(conversation.rounds)) return conversation
-    return {
-      ...conversation,
-      rounds: conversation.rounds.map((round) => {
-        if (!isRecord(round) || !Array.isArray(round.responseOutput)) return round
-        return {
-          ...round,
-          responseOutput: round.responseOutput.map((item) =>
-            isRecord(item) ? getPersistableResponseOutputItem(item as ResponsesOutputItem) : item,
-          ),
-        }
-      }),
-    }
-  })
-}
-
-export function migratePersistedState(persistedState: unknown): unknown {
-  if (!isRecord(persistedState)) return persistedState
-  return {
-    ...persistedState,
-    agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
-  }
-}
-
-function normalizeFavoriteCollectionName(value: string) {
-  return value.trim().replace(/\s+/g, ' ')
-}
-
-function createDefaultFavoriteCollection(now = Date.now()): FavoriteCollection {
-  return {
-    id: DEFAULT_FAVORITE_COLLECTION_ID,
-    name: DEFAULT_FAVORITE_COLLECTION_NAME,
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-function normalizeFavoriteCollections(value: unknown): FavoriteCollection[] {
-  const now = Date.now()
-  const collections = Array.isArray(value) ? value : []
-  const normalized: FavoriteCollection[] = []
-  const ids = new Set<string>()
-  for (const item of collections) {
-    if (!isRecord(item)) continue
-    if (typeof item.id !== 'string' || !item.id.trim()) continue
-    const id = item.id
-    if (id === ALL_FAVORITES_COLLECTION_ID || ids.has(id)) continue
-    const name = normalizeFavoriteCollectionName(typeof item.name === 'string' ? item.name : '')
-    if (!name) continue
-    ids.add(id)
-    normalized.push({
-      id,
-      name: name.slice(0, 60),
-      createdAt: typeof item.createdAt === 'number' ? item.createdAt : now,
-      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : now,
-    })
-  }
-  return normalized
-}
-
-function ensureDefaultFavoriteCollection(collections: FavoriteCollection[]) {
-  if (collections.length > 0) return collections
-  return [createDefaultFavoriteCollection(), ...collections]
-}
-
-/** 确保"默认"收藏夹存在（用于兜底孤立收藏任务） */
-function ensureDefaultNamedCollection(collections: FavoriteCollection[]) {
-  if (getDefaultNamedFavoriteCollectionId(collections)) return collections
-  return [createDefaultFavoriteCollection(), ...collections]
-}
-
-function getDefaultNamedFavoriteCollectionId(collections: FavoriteCollection[]) {
-  return collections.find((collection) => collection.id === DEFAULT_FAVORITE_COLLECTION_ID)?.id
-    ?? collections.find((collection) => collection.name === DEFAULT_FAVORITE_COLLECTION_NAME)?.id
-    ?? null
-}
-
-function resolveDefaultFavoriteCollectionId(collections: FavoriteCollection[], preferredId: unknown) {
-  if (preferredId === null) return null
-  if (typeof preferredId === 'string' && collections.some((collection) => collection.id === preferredId)) return preferredId
-  if (collections.some((collection) => collection.id === DEFAULT_FAVORITE_COLLECTION_ID)) return DEFAULT_FAVORITE_COLLECTION_ID
-  return collections[0]?.id ?? null
 }
 
 function createAgentConversation(now = Date.now()): AgentConversation {
@@ -656,10 +259,6 @@ function createAgentConversationTitle(prompt: string, fallbackTitle: string) {
   return `${chars.slice(0, AGENT_CONVERSATION_TITLE_MAX_LENGTH - 3).join('')}...`
 }
 
-function isEmptyAgentConversation(conversation: AgentConversation) {
-  return conversation.rounds.length === 0 && conversation.messages.length === 0 && !conversation.activeRoundId
-}
-
 function getLatestAgentConversation(conversations: AgentConversation[]) {
   return conversations.reduce<AgentConversation | null>((latest, conversation) => {
     if (!latest) return conversation
@@ -669,36 +268,9 @@ function getLatestAgentConversation(conversations: AgentConversation[]) {
 }
 
 export function getPersistedState(state: AppState) {
-  const settings = normalizeSettings(state.settings)
-  const galleryInputDraft = getPersistableGalleryInputDraft(state)
-  return {
-    settings,
-    params: state.params,
-    ...(settings.persistInputOnRestart && (state.appMode === 'gallery' || galleryInputDraft)
-      ? {
-          prompt: galleryInputDraft?.prompt ?? '',
-          inputImages: galleryInputDraft?.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) ?? [],
-        }
-      : {}),
-    dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
-    appMode: state.appMode,
-    galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
-      ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
-      : null,
-    ...(agentConversationMigrationPending && !agentConversationPersistenceReady
-      ? { agentConversations: getPersistableAgentConversations(state.agentConversations) }
-      : {}),
-    activeAgentConversationId: state.activeAgentConversationId,
-    agentInputDrafts: getPersistableAgentInputDrafts(state),
-    agentSidebarCollapsed: state.agentSidebarCollapsed,
-    agentAssetTab: state.agentAssetTab,
-    agentAssetPanelCollapsed: state.agentAssetPanelCollapsed,
-    favoriteCollections: state.favoriteCollections,
-    defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
-    supportPromptDismissed: state.supportPromptDismissed,
-    supportPromptOpen: state.supportPromptOpen,
-    supportPromptSkippedForImportedData: state.supportPromptSkippedForImportedData,
-  }
+  // 隐私模式中输入框已清空，仍保存进入前的输入，刷新后不丢失
+  const source = state.privacyMode ? { ...state, ...state.privacyMode.inputSnapshot } : state
+  return createPersistedState(source, agentConversationMigrationPending && !agentConversationPersistenceReady)
 }
 
 async function replaceStoredAgentConversations(conversations: AgentConversation[]) {
@@ -710,80 +282,14 @@ function getPersistableAgentConversation(conversation: AgentConversation): Agent
 }
 
 function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
-  if (!persistedState || typeof persistedState !== 'object') return currentState
-
-  const persisted = persistedState as Partial<AppState>
-  const settings = ensureMianyunSettings(persisted.settings ?? currentState.settings)
-  const hasPersistedAgentConversations = Array.isArray(persisted.agentConversations)
-  if (hasPersistedAgentConversations && normalizeAgentConversations(persisted.agentConversations).length > 0) {
-    agentConversationMigrationPending = true
-  }
-  const agentConversations = hasPersistedAgentConversations
-    ? normalizeAgentConversations(persisted.agentConversations)
-    : currentState.agentConversations
-  const activeAgentConversationId =
-    typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
-      ? persisted.activeAgentConversationId
-      : agentConversations[0]?.id ?? null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
-  const galleryInputDraft = settings.persistInputOnRestart
-    ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
-        prompt: persisted.prompt,
-        inputImages: persisted.inputImages,
-        maskDraft: null,
-        maskEditorImageId: null,
-      })
-    : null
-  const normalizedAgentInputDrafts = hasPersistedAgentConversations
-    ? normalizeAgentInputDrafts(persisted.agentInputDrafts, agentConversations)
-    : normalizeAgentInputDraftsByKey(persisted.agentInputDrafts)
-  let agentInputDrafts = cleanStaleAgentInputDrafts(normalizedAgentInputDrafts, activeAgentConversationId)
-  if (appMode === 'agent' && activeAgentConversationId && !agentInputDrafts[activeAgentConversationId] && settings.persistInputOnRestart && typeof persisted.prompt === 'string') {
-    agentInputDrafts = {
-      ...agentInputDrafts,
-      [activeAgentConversationId]: normalizeAgentInputDraft({
-        prompt: persisted.prompt,
-        inputImages: persisted.inputImages,
-        maskDraft: null,
-        maskEditorImageId: null,
-      }, Date.now()),
-    }
-  }
-  const restoredAgentDraft = appMode === 'agent' && activeAgentConversationId
-    ? agentInputDrafts[activeAgentConversationId] ?? null
-    : null
-  const favoriteCollections = Array.isArray(persisted.favoriteCollections)
-    ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections(persisted.favoriteCollections))
-    : currentState.favoriteCollections
-  const defaultFavoriteCollectionId = resolveDefaultFavoriteCollectionId(favoriteCollections, persisted.defaultFavoriteCollectionId)
+  const plan = normalizePersistedState(persistedState, currentState)
+  if (!plan) return currentState
+  if (plan.shouldMigrateAgentConversations) agentConversationMigrationPending = true
   return {
     ...currentState,
-    ...persisted,
-    settings,
-    params: {
-      ...DEFAULT_PARAMS,
-      ...(persisted.params ?? {}),
-      resolution: persisted.params?.resolution === '2K' || persisted.params?.resolution === '4K' ? persisted.params.resolution : '1K',
-    },
-    appMode,
-    galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,
-    agentConversations,
-    activeAgentConversationId,
-    agentInputDrafts,
-    agentSidebarCollapsed: Boolean(persisted.agentSidebarCollapsed),
-    agentAssetTab: persisted.agentAssetTab === 'references' ? 'references' : 'outputs',
-    agentAssetPanelCollapsed: Boolean(persisted.agentAssetPanelCollapsed),
-    favoriteCollections,
-    defaultFavoriteCollectionId,
+    ...plan.state,
     activeFavoriteCollectionId: null,
     favoritePickerTaskIds: null,
-    supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
-    supportPromptOpen: Boolean(persisted.supportPromptOpen),
-    supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
-    prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
-    inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
-    maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
-    maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
   }
 }
 
@@ -796,13 +302,30 @@ interface AppState {
 
   // 设置
   settings: AppSettings
+  previousPresetConfig: PresetConfig | null
   setSettings: (s: Partial<AppSettings>) => void
+  setPresetImportedSettings: (
+    importedSettings: Partial<AppSettings> | unknown,
+    transform?: (settings: AppSettings) => Partial<AppSettings>,
+  ) => Promise<void>
+  dismissedPresetProfileIds: string[]
+  dismissPresetProfile: (id: string) => void
+  restorePresetProfile: (id: string) => void
+  dismissedPresetProviderIds: string[]
+  dismissPresetProvider: (id: string) => void
+  restorePresetProvider: (id: string) => void
   dismissedCodexCliPrompts: string[]
   dismissCodexCliPrompt: (key: string) => void
 
   // 输入
   prompt: string
   setPrompt: (p: string) => void
+  /**
+   * 输入框最后一次的选区（可见文本偏移），供画板等外部入口插入胶囊并覆盖选中内容；未聚焦过时为 null。
+   * 同时记下当时的提示词，提示词被其他途径替换后选区即失效，使用前需比对。
+   */
+  promptSelection: { start: number; end: number; prompt: string } | null
+  setPromptSelection: (selection: { start: number; end: number }) => void
   inputImages: InputImage[]
   addInputImage: (img: InputImage) => void
   replaceInputImage: (idx: number, img: InputImage) => void
@@ -823,7 +346,13 @@ interface AppState {
   reusedTaskApiProfileId: string | null
   reusedTaskApiProfileName: string | null
   reusedTaskApiProfileMissing: boolean
-  setReusedTaskApiProfile: (profileId: string | null, missing?: boolean, profileName?: string | null) => void
+  /** 临时复用其他配置时使用的模型，只在本次复用中生效，不写入该配置 */
+  reusedTaskApiModel: string | null
+  setReusedTaskApiProfile: (profileId: string | null, missing?: boolean, profileName?: string | null, model?: string | null) => void
+  setReusedTaskApiModel: (model: string) => void
+  /** 正在进行的批量提交进度，仅保存在内存中 */
+  batchProgress: BatchProgress | null
+  setBatchProgress: (progress: BatchProgress | null) => void
 
   // Agent
   agentConversations: AgentConversation[]
@@ -842,6 +371,8 @@ interface AppState {
   setActiveAgentRoundId: (conversationId: string, roundId: string | null) => void
   renameAgentConversation: (id: string, title: string) => void
   deleteAgentConversation: (id: string) => void
+  deleteAgentRound: (conversationId: string, roundId: string) => Promise<AgentDeletionResult>
+  deleteAgentAssistantMessage: (conversationId: string, messageId: string) => Promise<AgentDeletionResult>
   setAgentSidebarCollapsed: (collapsed: boolean) => void
   setAgentAssetTab: (tab: 'references' | 'outputs') => void
   setAgentAssetPanelCollapsed: (collapsed: boolean) => void
@@ -891,13 +422,20 @@ interface AppState {
   setDetailTaskId: (id: string | null) => void
   lightboxImageId: string | null
   lightboxImageList: string[]
-  setLightboxImageId: (id: string | null, list?: string[]) => void
+  /** 预览参考图时对应的提示词，按图片在列表中的位置取其评论；为空时不显示评论 */
+  lightboxCommentPrompt: string | null
+  setLightboxImageId: (id: string | null, list?: string[], commentPrompt?: string | null) => void
+  /** 画板；baseImageSrc 为画布底图，replaceImageId 为完成后要替换的参考图 */
+  sketchBoard: SketchBoardRequest | null
+  setSketchBoard: (board: SketchBoardRequest | null) => void
   showSettings: boolean
   settingsTabRequest: SettingsTab | null
   setShowSettings: (v: boolean, tab?: SettingsTab) => void
   supportPromptOpen: boolean
   supportPromptDismissed: boolean
   supportPromptSkippedForImportedData: boolean
+  /** 通过链接添加的参考图 id 到原链接，供只接受链接参考图的自定义服务商使用 */
+  imageSourceUrls: Record<string, string>
   setSupportPromptOpen: (v: boolean) => void
   dismissSupportPrompt: () => void
 
@@ -909,6 +447,8 @@ interface AppState {
   confirmDialog: {
     title: string
     message: string
+    /** 显示在 message 下方的自定义内容，过长时可滚动 */
+    content?: ReactNode
     checkbox?: {
       label: string
       defaultChecked?: boolean
@@ -927,16 +467,28 @@ interface AppState {
     minConfirmDelayMs?: number
     messageAlign?: 'left' | 'center'
     tone?: 'danger' | 'warning'
-    action?: (checkboxChecked?: boolean) => void
+    awaitAction?: boolean
+    /** awaitAction 执行期间确认按钮显示的文字 */
+    busyText?: string
+    action?: (checkboxChecked?: boolean) => void | boolean | Promise<void | boolean>
     cancelAction?: (checkboxChecked?: boolean) => void
   } | null
   setConfirmDialog: (d: AppState['confirmDialog']) => void
+
+  // 隐私模式：不持久化，刷新页面后自然退出
+  privacyMode: PrivacyModeState | null
+  /** 每次进入隐私模式时递增，作为弹窗组件的 key，丢弃组件内部打开的弹窗和未保存内容 */
+  privacyModeEpoch: number
+  /** 设置弹窗的 key；导入导出中进入隐私模式时不变，保留进行中的传输状态 */
+  settingsModalEpoch: number
+  togglePrivacyMode: () => void
 }
 
 function isImageReferencedByState(state: AppState, imageId: string) {
   if (state.inputImages.some((img) => img.id === imageId)) return true
   if (state.galleryInputDraft?.inputImages.some((img) => img.id === imageId)) return true
   if (Object.values(state.agentInputDrafts).some((draft) => draft.inputImages.some((img) => img.id === imageId))) return true
+  if (getPrivacySnapshotImageIds(state.privacyMode).includes(imageId)) return true
   if (state.tasks.some((task) =>
     task.inputImageIds.includes(imageId) ||
     task.outputImages.includes(imageId) ||
@@ -960,196 +512,48 @@ function isImageReferencedByState(state: AppState, imageId: string) {
 }
 
 export async function deleteImageIfUnreferenced(imageId: string) {
-  imageCache.delete(imageId)
-  thumbnailCache.delete(imageId)
-  thumbnailBackfillIds.delete(imageId)
-  thumbnailBackfillRunningIds.delete(imageId)
-  thumbnailSubscribers.delete(imageId)
   if (isImageReferencedByState(useStore.getState(), imageId)) return
   try {
-    await deleteImage(imageId)
+    await deleteStoredImageIfUnreferenced(imageId)
   } catch {
     // 清理是内存/存储优化，失败不影响替换结果。
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+function forgetImageSourceUrl(imageId: string) {
+  if (!(imageId in useStore.getState().imageSourceUrls)) return
+  useStore.setState((s) => {
+    const imageSourceUrls = { ...s.imageSourceUrls }
+    delete imageSourceUrls[imageId]
+    return { imageSourceUrls }
+  })
 }
 
-function normalizeInputImages(value: unknown): InputImage[] {
-  if (!Array.isArray(value)) return []
-  return value
-    .map((img): InputImage | null => {
-      if (!isRecord(img) || typeof img.id !== 'string') return null
-      return { id: img.id, dataUrl: typeof img.dataUrl === 'string' ? img.dataUrl : '' }
+async function deleteStoredImageIfUnreferenced(imageId: string) {
+  if (isImageReferencedByState(useStore.getState(), imageId)) return
+  const [image, thumbnail] = await Promise.all([getImage(imageId), getStoredImageThumbnail(imageId)])
+  if (isImageReferencedByState(useStore.getState(), imageId)) return
+
+  await deleteImage(imageId)
+  if (!isImageReferencedByState(useStore.getState(), imageId)) {
+    deleteImageCacheEntry(imageId)
+    forgetImageSourceUrl(imageId)
+    return
+  }
+
+  if (image) {
+    await putImage(image)
+    cacheImage(image.id, image.dataUrl)
+  }
+  if (thumbnail) {
+    await putImageThumbnail(thumbnail)
+    cacheThumbnail(thumbnail.id, {
+      src: thumbnail.thumbnailDataUrl,
+      width: thumbnail.width,
+      height: thumbnail.height,
+      thumbnailVersion: thumbnail.thumbnailVersion,
     })
-    .filter((img): img is InputImage => img != null)
-}
-
-function normalizeMaskDraft(value: unknown): MaskDraft | null {
-  if (!isRecord(value)) return null
-  if (typeof value.targetImageId !== 'string' || typeof value.maskDataUrl !== 'string') return null
-  return {
-    targetImageId: value.targetImageId,
-    maskDataUrl: value.maskDataUrl,
-    updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : Date.now(),
   }
-}
-
-function normalizeAgentInputDraft(value: unknown, fallbackUpdatedAt = Date.now()): AgentInputDraft {
-  const draft = isRecord(value) ? value : {}
-  const updatedAt = typeof draft.updatedAt === 'number' && Number.isFinite(draft.updatedAt) ? draft.updatedAt : fallbackUpdatedAt
-  return {
-    prompt: typeof draft.prompt === 'string' ? draft.prompt : '',
-    inputImages: normalizeInputImages(draft.inputImages),
-    maskDraft: normalizeMaskDraft(draft.maskDraft),
-    maskEditorImageId: typeof draft.maskEditorImageId === 'string' ? draft.maskEditorImageId : null,
-    updatedAt,
-  }
-}
-
-function normalizeAgentInputDrafts(value: unknown, conversations: AgentConversation[]): Record<string, AgentInputDraft> {
-  if (!isRecord(value)) return {}
-  const conversationIds = new Set(conversations.map((conversation) => conversation.id))
-  const drafts: Record<string, AgentInputDraft> = {}
-  for (const [conversationId, draft] of Object.entries(value)) {
-    if (!conversationIds.has(conversationId)) continue
-    const normalized = normalizeAgentInputDraft(draft)
-    if (!isEmptyAgentInputDraft(normalized)) drafts[conversationId] = normalized
-  }
-  return drafts
-}
-
-function normalizeAgentInputDraftsByKey(value: unknown): Record<string, AgentInputDraft> {
-  if (!isRecord(value)) return {}
-  const drafts: Record<string, AgentInputDraft> = {}
-  for (const [conversationId, draft] of Object.entries(value)) {
-    const normalized = normalizeAgentInputDraft(draft)
-    if (!isEmptyAgentInputDraft(normalized)) drafts[conversationId] = normalized
-  }
-  return drafts
-}
-
-export function cleanStaleAgentInputDrafts(drafts: Record<string, AgentInputDraft>, activeConversationId: string | null, now = Date.now()) {
-  const cutoff = now - AGENT_INPUT_DRAFT_RETENTION_MS
-  const next: Record<string, AgentInputDraft> = {}
-  for (const [conversationId, draft] of Object.entries(drafts)) {
-    if (conversationId === activeConversationId || (draft.updatedAt ?? now) >= cutoff) {
-      next[conversationId] = draft
-    }
-  }
-  return next
-}
-
-function clearInputDraftState(): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
-  return {
-    prompt: '',
-    inputImages: [],
-    maskDraft: null,
-    maskEditorImageId: null,
-  }
-}
-
-function copyAgentInputDraft(draft: AgentInputDraft): AgentInputDraft {
-  return {
-    prompt: draft.prompt,
-    inputImages: draft.inputImages.map((img) => ({ ...img })),
-    maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
-    maskEditorImageId: draft.maskEditorImageId,
-    updatedAt: draft.updatedAt ?? Date.now(),
-  }
-}
-
-function getCurrentAgentInputDraft(state: Pick<AppState, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>): AgentInputDraft {
-  return {
-    prompt: state.prompt,
-    inputImages: state.inputImages,
-    maskDraft: state.maskDraft,
-    maskEditorImageId: state.maskEditorImageId,
-    updatedAt: Date.now(),
-  }
-}
-
-function isEmptyAgentInputDraft(draft: AgentInputDraft) {
-  return draft.prompt.length === 0 && draft.inputImages.length === 0 && !draft.maskDraft && !draft.maskEditorImageId
-}
-
-function setAgentInputDraft(drafts: Record<string, AgentInputDraft>, conversationId: string, draft: AgentInputDraft) {
-  const next = { ...drafts }
-  if (isEmptyAgentInputDraft(draft)) {
-    delete next[conversationId]
-  } else {
-    next[conversationId] = copyAgentInputDraft(draft)
-  }
-  return next
-}
-
-function saveActiveAgentInputDrafts(state: Pick<AppState, 'appMode' | 'activeAgentConversationId' | 'agentInputDrafts' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
-  if (state.appMode !== 'agent' || !state.activeAgentConversationId) return state.agentInputDrafts
-  return setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, getCurrentAgentInputDraft(state))
-}
-
-function saveGalleryInputDraft(state: Pick<AppState, 'appMode' | 'galleryInputDraft' | 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'>) {
-  if (state.appMode !== 'gallery') return state.galleryInputDraft
-  const draft = getCurrentAgentInputDraft(state)
-  return isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft)
-}
-
-function getPersistableGalleryInputDraft(state: AppState) {
-  return saveGalleryInputDraft(state)
-}
-
-function restoreGalleryInputDraftState(draft: AgentInputDraft | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
-  if (!draft) return clearInputDraftState()
-  return {
-    prompt: draft.prompt,
-    inputImages: draft.inputImages.map((img) => ({ ...img })),
-    maskDraft: draft.maskDraft ? { ...draft.maskDraft } : null,
-    maskEditorImageId: draft.maskEditorImageId,
-  }
-}
-
-function restoreAgentInputDraftState(drafts: Record<string, AgentInputDraft>, conversationId: string | null): Pick<AgentInputDraft, 'prompt' | 'inputImages' | 'maskDraft' | 'maskEditorImageId'> {
-  const draft = conversationId ? drafts[conversationId] : null
-  return restoreGalleryInputDraftState(draft ?? null)
-}
-
-function syncActiveInputDraft<T extends Partial<AgentInputDraft>>(
-  state: AppState,
-  patch: T,
-): T & { agentInputDrafts?: Record<string, AgentInputDraft>; galleryInputDraft?: AgentInputDraft | null } {
-  const draft: AgentInputDraft = {
-    prompt: patch.prompt ?? state.prompt,
-    inputImages: patch.inputImages ?? state.inputImages,
-    maskDraft: patch.maskDraft !== undefined ? patch.maskDraft : state.maskDraft,
-    maskEditorImageId: patch.maskEditorImageId !== undefined ? patch.maskEditorImageId : state.maskEditorImageId,
-  }
-  if (state.appMode === 'gallery') {
-    return {
-      ...patch,
-      galleryInputDraft: isEmptyAgentInputDraft(draft) ? null : copyAgentInputDraft(draft),
-    }
-  }
-  if (!state.activeAgentConversationId) return patch
-  return {
-    ...patch,
-    agentInputDrafts: setAgentInputDraft(state.agentInputDrafts, state.activeAgentConversationId, draft),
-  }
-}
-
-function getPersistableAgentInputDrafts(state: AppState) {
-  const drafts = saveActiveAgentInputDrafts(state)
-  const conversationIds = new Set(state.agentConversations.map((conversation) => conversation.id))
-  const persistable: Record<string, AgentInputDraft> = {}
-  for (const [conversationId, draft] of Object.entries(drafts)) {
-    if (!conversationIds.has(conversationId) || isEmptyAgentInputDraft(draft)) continue
-    persistable[conversationId] = {
-      ...copyAgentInputDraft(draft),
-      inputImages: draft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })),
-    }
-  }
-  return persistable
 }
 
 export const useStore = create<AppState>()(
@@ -1198,7 +602,7 @@ export const useStore = create<AppState>()(
         if (settings.agentApiConfigMode === 'off' && activeProfile.provider === 'openai' && activeProfile.apiMode !== 'responses') {
           state.setConfirmDialog({
             title: '需要 Responses API 配置',
-            message: `当前配置「${activeProfile.name}」使用的是 Images API，仅支持生成图片，无 Agent 模式需要的对话能力。\n\n请前往 API 配置页，将当前配置调整为 Responses API，或切换/新建一个支持 Responses API 的配置。`,
+            message: `当前配置「${activeProfile.name}」使用的是 Images API，仅支持生成图片，无 Agent 模式需要的对话能力。\n\n请在「设置 → API 配置」中将当前配置调整为 Responses API，或切换/新建一个支持 Responses API 的配置。`,
             confirmText: '去设置',
             cancelText: '取消',
             action: () => {
@@ -1211,7 +615,7 @@ export const useStore = create<AppState>()(
         if (settings.agentApiConfigMode !== 'off') {
           state.setConfirmDialog({
             title: 'Agent API 配置不完整',
-            message: `${agentValidationError.message}\n\n请前往 Agent 配置页，选择或新建可用配置。`,
+            message: `${agentValidationError.message}\n\n请在「设置 → Agent 配置」中选择或新建可用配置。`,
             confirmText: '去设置',
             cancelText: '取消',
             action: () => {
@@ -1223,7 +627,7 @@ export const useStore = create<AppState>()(
 
         state.setConfirmDialog({
           title: '配置不支持 Agent 模式',
-          message: `当前配置「${activeProfile.name}」所属的服务商暂不支持 Agent 模式。Agent 模式需要使用支持 Responses API 的 OpenAI 配置。\n\n请前往 API 配置页，切换或新建一个支持 Responses API 的配置。`,
+          message: `当前配置「${activeProfile.name}」所属的服务商暂不支持 Agent 模式。Agent 模式需要使用支持 Responses API 的 OpenAI 配置。\n\n请在「设置 → API 配置」中切换或新建一个支持 Responses API 的配置。`,
           confirmText: '去设置',
           cancelText: '取消',
           action: () => {
@@ -1234,6 +638,25 @@ export const useStore = create<AppState>()(
 
       // Settings
       settings: { ...MIANYUN_DEFAULT_SETTINGS },
+      previousPresetConfig: null,
+      dismissedPresetProfileIds: [],
+      dismissPresetProfile: (id) => set((state) => ({
+        dismissedPresetProfileIds: state.dismissedPresetProfileIds.includes(id)
+          ? state.dismissedPresetProfileIds
+          : [...state.dismissedPresetProfileIds, id],
+      })),
+      restorePresetProfile: (id) => set((state) => ({
+        dismissedPresetProfileIds: state.dismissedPresetProfileIds.filter((item) => item !== id),
+      })),
+      dismissedPresetProviderIds: [],
+      dismissPresetProvider: (id) => set((state) => ({
+        dismissedPresetProviderIds: state.dismissedPresetProviderIds.includes(id)
+          ? state.dismissedPresetProviderIds
+          : [...state.dismissedPresetProviderIds, id],
+      })),
+      restorePresetProvider: (id) => set((state) => ({
+        dismissedPresetProviderIds: state.dismissedPresetProviderIds.filter((item) => item !== id),
+      })),
       setSettings: (s) => set((st) => {
         const previous = normalizeSettings(st.settings)
         const incoming = s as Partial<AppSettings>
@@ -1266,15 +689,56 @@ export const useStore = create<AppState>()(
               : profile,
           )
         }
-        const settings = normalizeSettings(merged)
+        const effectiveDismissedPresetProviderIds = st.dismissedPresetProviderIds.filter((id) =>
+          !isPresetProviderDeletionPrevented(id, previous.profiles),
+        )
+        const settings = normalizeSettings(enforcePresetConfigPolicy(merged, {
+          dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
+        }))
         const shouldClearReusedProfile = st.reusedTaskApiProfileId && settings.activeProfileId === st.reusedTaskApiProfileId
         return {
           settings,
           ...(shouldClearReusedProfile
-            ? { reusedTaskApiProfileId: null, reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false }
+            ? { reusedTaskApiProfileId: null, reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false, reusedTaskApiModel: null }
             : {}),
         }
       }),
+      setPresetImportedSettings: async (importedSettings, transform) => {
+        set((state) => {
+          const presetIds = getPresetProfileIds()
+          const presetProviderIds = getPresetProviderIds()
+          const dismissedPresetProfileIds = state.dismissedPresetProfileIds.filter((id) => presetIds.has(id))
+          const deletionPrevented = isPresetConfigDeletionPrevented()
+          const remainingPresetProfiles = (getPresetConfig()?.profiles ?? state.settings.profiles)
+            .filter((profile) => !dismissedPresetProfileIds.includes(profile.id))
+          const dismissedPresetProviderIds = state.dismissedPresetProviderIds
+            .filter((id) => presetProviderIds.has(id))
+          const effectiveDismissedPresetProviderIds = dismissedPresetProviderIds
+            .filter((id) => !isPresetProviderDeletionPrevented(id, remainingPresetProfiles))
+          const merged = mergePresetImportedSettings(state.settings, importedSettings, {
+            lockPresetParams: isPresetConfigParamsLocked(),
+            dismissedPresetProfileIds: deletionPrevented ? [] : dismissedPresetProfileIds,
+            dismissedPresetProviderIds: effectiveDismissedPresetProviderIds,
+            previousPresetConfig: state.previousPresetConfig,
+            usedPresetProfileIds: state.tasks.flatMap((task) => task.apiProfileId ? [task.apiProfileId] : []),
+          })
+          const settings = normalizeSettings(enforcePresetConfigPolicy(
+            normalizeSettings(transform?.(merged.settings) ?? merged.settings),
+            { dismissedPresetProviderIds: effectiveDismissedPresetProviderIds },
+          ))
+          const shouldClearReusedProfile = state.reusedTaskApiProfileId && settings.activeProfileId === state.reusedTaskApiProfileId
+          return {
+            settings,
+            previousPresetConfig: getPresetConfig() ? merged.presetConfig : null,
+            dismissedPresetProfileIds,
+            dismissedPresetProviderIds,
+            reusedTaskApiProfileId: shouldClearReusedProfile ? null : state.reusedTaskApiProfileId,
+            ...(shouldClearReusedProfile
+              ? { reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false, reusedTaskApiModel: null }
+              : {}),
+          }
+        })
+      },
       dismissedCodexCliPrompts: [],
       dismissCodexCliPrompt: (key) => set((st) => ({
         dismissedCodexCliPrompts: st.dismissedCodexCliPrompts.includes(key)
@@ -1285,6 +749,8 @@ export const useStore = create<AppState>()(
       // Input
       prompt: '',
       setPrompt: (prompt) => set((s) => syncActiveInputDraft(s, { prompt })),
+      promptSelection: null,
+      setPromptSelection: (selection) => set((s) => ({ promptSelection: { ...selection, prompt: s.prompt } })),
       inputImages: [],
       addInputImage: (img) =>
         set((s) => {
@@ -1300,12 +766,10 @@ export const useStore = create<AppState>()(
           if (s.inputImages.some((item, itemIdx) => itemIdx !== idx && item.id === img.id)) return s
           removedImageId = previous.id
           const inputImages = s.inputImages.map((item, itemIdx) => itemIdx === idx ? img : item)
-          const shouldClearMask = previous.id === s.maskDraft?.targetImageId
-          return syncActiveInputDraft(s, {
-            inputImages,
-            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, { [previous.id]: img.id }),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
-          })
+          return syncActiveInputDraft(s, updateInputDraftImages(s, inputImages, {
+            equivalentImageIds: { [previous.id]: img.id },
+            clearMissingMask: previous.id === s.maskDraft?.targetImageId,
+          }))
         })
         if (removedImageId) void deleteImageIfUnreferenced(removedImageId)
       },
@@ -1313,19 +777,15 @@ export const useStore = create<AppState>()(
         set((s) => {
           const removed = s.inputImages[idx]
           const inputImages = s.inputImages.filter((_, i) => i !== idx)
-          const shouldClearMask = removed?.id === s.maskDraft?.targetImageId
-          return syncActiveInputDraft(s, {
-            inputImages,
-            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
-          })
+          return syncActiveInputDraft(s, updateInputDraftImages(s, inputImages, {
+            clearMissingMask: removed?.id === s.maskDraft?.targetImageId,
+          }))
         }),
       clearInputImages: () =>
         set((s) => {
-          for (const img of s.inputImages) imageCache.delete(img.id)
+          for (const img of s.inputImages) deleteCachedImage(img.id)
           return syncActiveInputDraft(s, {
-            inputImages: [],
-            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, []),
+            ...updateInputDraftImages(s, []),
             maskDraft: null,
             maskEditorImageId: null,
           })
@@ -1333,13 +793,9 @@ export const useStore = create<AppState>()(
       setInputImages: (imgs, options) =>
         set((s) => {
           const inputImages = orderImagesWithMaskFirst(imgs, s.maskDraft?.targetImageId)
-          const shouldClearMask =
-            Boolean(s.maskDraft) && !inputImages.some((img) => img.id === s.maskDraft?.targetImageId)
-          return syncActiveInputDraft(s, {
-            inputImages,
-            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, inputImages, options?.equivalentImageIds),
-            ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
-          })
+          return syncActiveInputDraft(s, updateInputDraftImages(s, inputImages, {
+            equivalentImageIds: options?.equivalentImageIds,
+          }))
         }),
       moveInputImage: (fromIdx, toIdx) =>
         set((s) => {
@@ -1353,10 +809,7 @@ export const useStore = create<AppState>()(
           if (insertIdx === fromIdx) return s
           const [moved] = images.splice(fromIdx, 1)
           images.splice(insertIdx, 0, moved)
-          return syncActiveInputDraft(s, {
-            inputImages: images,
-            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, images),
-          })
+          return syncActiveInputDraft(s, updateInputDraftImages(s, images, { clearMissingMask: false }))
         }),
       maskDraft: null,
       setMaskDraft: (maskDraft) =>
@@ -1382,11 +835,16 @@ export const useStore = create<AppState>()(
       reusedTaskApiProfileId: null,
       reusedTaskApiProfileName: null,
       reusedTaskApiProfileMissing: false,
-      setReusedTaskApiProfile: (profileId, missing = false, profileName = null) => set({
+      reusedTaskApiModel: null,
+      setReusedTaskApiProfile: (profileId, missing = false, profileName = null, model = null) => set({
         reusedTaskApiProfileId: profileId,
         reusedTaskApiProfileName: profileName,
         reusedTaskApiProfileMissing: missing,
+        reusedTaskApiModel: profileId ? model : null,
       }),
+      setReusedTaskApiModel: (reusedTaskApiModel) => set({ reusedTaskApiModel }),
+      batchProgress: null,
+      setBatchProgress: (batchProgress) => set({ batchProgress }),
 
       // Agent
       agentConversations: [],
@@ -1475,6 +933,8 @@ export const useStore = create<AppState>()(
           ...(activeDeleted ? clearInputDraftState() : {}),
         }
       }),
+      deleteAgentRound: (conversationId, roundId) => deleteAgentRoundAndTasks(conversationId, roundId),
+      deleteAgentAssistantMessage: (conversationId, messageId) => deleteAgentAssistantMessageAndTasks(conversationId, messageId),
       setAgentSidebarCollapsed: (agentSidebarCollapsed) => set({ agentSidebarCollapsed }),
       setAgentAssetTab: (agentAssetTab) => set({ agentAssetTab }),
       setAgentAssetPanelCollapsed: (agentAssetPanelCollapsed) => set({ agentAssetPanelCollapsed }),
@@ -1520,6 +980,7 @@ export const useStore = create<AppState>()(
       streamPreviewSlots: {},
       setTaskStreamPreview: (taskId, image, requestIndex = 0) => set((s) => {
         if (image) {
+          if (!s.tasks.some((task) => task.id === taskId)) return s
           const slotKey = String(requestIndex)
           const currentSlots = s.streamPreviewSlots[taskId] ?? {}
           if (s.streamPreviews[taskId] === image && currentSlots[slotKey] === image) return s
@@ -1588,9 +1049,19 @@ export const useStore = create<AppState>()(
       },
       lightboxImageId: null,
       lightboxImageList: [],
-      setLightboxImageId: (lightboxImageId, list) => {
+      lightboxCommentPrompt: null,
+      setLightboxImageId: (lightboxImageId, list, commentPrompt = null) => {
         if (lightboxImageId) dismissAllTooltips()
-        set({ lightboxImageId, lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []) })
+        set({
+          lightboxImageId,
+          lightboxImageList: list ?? (lightboxImageId ? [lightboxImageId] : []),
+          lightboxCommentPrompt: lightboxImageId ? commentPrompt : null,
+        })
+      },
+      sketchBoard: null,
+      setSketchBoard: (sketchBoard) => {
+        if (sketchBoard) dismissAllTooltips()
+        set({ sketchBoard })
       },
       showSettings: false,
       settingsTabRequest: null,
@@ -1605,6 +1076,7 @@ export const useStore = create<AppState>()(
       supportPromptOpen: false,
       supportPromptDismissed: false,
       supportPromptSkippedForImportedData: false,
+      imageSourceUrls: {},
       setSupportPromptOpen: (supportPromptOpen) => set({ supportPromptOpen }),
       dismissSupportPrompt: () => set({ supportPromptOpen: false, supportPromptDismissed: true }),
 
@@ -1625,11 +1097,74 @@ export const useStore = create<AppState>()(
         if (confirmDialog) dismissAllTooltips()
         set({ confirmDialog })
       },
+
+      privacyMode: null,
+      privacyModeEpoch: 0,
+      settingsModalEpoch: 0,
+      togglePrivacyMode: () => {
+        const state = get()
+        if (state.privacyMode) {
+          set({
+            privacyMode: null,
+            ...restorePrivacyInputState(state.privacyMode.inputSnapshot, state),
+          })
+          const stopped = state.privacyMode.stoppedBatchPrompts
+          if (stopped > 0) get().showToast(`进入隐私模式时停止了批量提交，${stopped} 条提示词未提交`, 'info')
+          return
+        }
+
+        const privacyMode = createPrivacyModeState(state, Date.now())
+        // 继续批量会用旧提示词创建新的可见任务；已开始的任务继续执行
+        if (state.batchProgress) endBatch(activeBatchId)
+        dismissAllTooltips()
+        // 导入导出进行中保留设置弹窗和其中的确认框，传输期间的限制与提示照旧，其余照常进入隐私模式
+        const keepSettings = Boolean(useSettingsDataTransfer.getState().mode)
+        const activeConversation = state.agentConversations.find((c) => c.id === state.activeAgentConversationId)
+        set({
+          privacyMode,
+          privacyModeEpoch: state.privacyModeEpoch + 1,
+          appMode: 'gallery',
+          ...clearInputDraftState(),
+          galleryInputDraft: null,
+          agentInputDrafts: {},
+          activeAgentConversationId: activeConversation && !isPrivacyHiddenConversation(privacyMode, activeConversation) ? activeConversation.id : null,
+          reusedTaskApiProfileId: null,
+          reusedTaskApiProfileName: null,
+          reusedTaskApiProfileMissing: false,
+          reusedTaskApiModel: null,
+          agentMobileHeaderVisible: true,
+          agentEditingRoundId: null,
+          agentEditingConversationId: null,
+          searchQuery: '',
+          filterStatus: 'all',
+          filterFavorite: false,
+          activeFavoriteCollectionId: null,
+          selectedTaskIds: [],
+          selectedFavoriteCollectionIds: [],
+          // 直接关闭，不经过各弹窗的关闭流程，不保存草稿也不弹出确认
+          ...(keepSettings ? {} : {
+            showSettings: false,
+            settingsTabRequest: null,
+            confirmDialog: null,
+            settingsModalEpoch: state.settingsModalEpoch + 1,
+          }),
+          detailTaskId: null,
+          lightboxImageId: null,
+          lightboxImageList: [],
+          lightboxCommentPrompt: null,
+          sketchBoard: null,
+          favoritePickerTaskIds: null,
+          isManageCollectionsModalOpen: false,
+          toast: null,
+        })
+      },
     }),
     {
       name: 'gpt-image-playground',
+      // 与 zustand 默认存储（window.localStorage）一致；客户端改用预加载到内存的 SQLite kv
+      storage: createJSONStorage(() => isTauri ? tauriStorage : window.localStorage),
       version: 2,
-      migrate: (persistedState) => migratePersistedState(persistedState),
+      migrate: migratePersistedState,
       partialize: getPersistedState,
       merge: mergePersistedState,
     },
@@ -1675,20 +1210,6 @@ function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
-function getPersistableRawResponsePayload(rawResponsePayload?: string) {
-  if (!rawResponsePayload) return rawResponsePayload
-  try {
-    const payload = JSON.parse(rawResponsePayload) as { output?: unknown }
-    if (!Array.isArray(payload.output)) return rawResponsePayload
-    const output = payload.output.map((item) =>
-      isRecord(item) ? getPersistableResponseOutputItem(item as ResponsesOutputItem) : item,
-    )
-    return JSON.stringify({ ...payload, output }, null, 2)
-  } catch {
-    return rawResponsePayload
-  }
-}
-
 function getPersistableTask(task: TaskRecord): TaskRecord {
   const rawResponsePayload = getPersistableRawResponsePayload(task.rawResponsePayload)
   return rawResponsePayload === task.rawResponsePayload ? task : { ...task, rawResponsePayload }
@@ -1703,12 +1224,8 @@ export function getCodexCliPromptKey(settings: AppSettings): string {
   return `${profile.baseUrl}\n${profile.apiKey}`
 }
 
-function isOpenAITask(task: TaskRecord) {
-  return (task.apiProvider ?? 'openai') !== 'fal'
-}
-
 function isRunningOpenAITask(task: TaskRecord) {
-  return task.status === 'running' && isOpenAITask(task)
+  return task.status === 'running' && (task.apiProvider ?? 'openai') !== 'fal'
 }
 
 function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasInputImages: boolean) {
@@ -1716,26 +1233,6 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
   if (!customProvider?.poll) return false
   const submitMapping = hasInputImages && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
   return Boolean(submitMapping.taskIdPath)
-}
-
-export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
-  const interruptedTasks: TaskRecord[] = []
-  const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
-
-    const updated: TaskRecord = {
-      ...task,
-      status: 'error',
-      error: OPENAI_INTERRUPTED_ERROR,
-      falRecoverable: false,
-      finishedAt: now,
-      elapsed: Math.max(0, now - task.createdAt),
-    }
-    interruptedTasks.push(updated)
-    return updated
-  })
-
-  return { tasks: updatedTasks, interruptedTasks }
 }
 
 function clearOpenAIWatchdogTimer(taskId: string) {
@@ -1749,12 +1246,11 @@ function failOpenAITaskIfStillRunning(taskId: string, error: string, now = Date.
   if (!task || !isRunningOpenAITask(task)) return false
 
   updateTaskInStore(taskId, {
-    status: 'error',
-    error,
+    ...createTaskErrorPatch(task, error, now),
     falRecoverable: false,
-    finishedAt: now,
-    elapsed: Math.max(0, now - task.createdAt),
+    elapsed: Math.max(0, now - (task.startedAt ?? task.createdAt)),
   })
+  showTaskFailureNotification(task)
   return true
 }
 
@@ -1764,20 +1260,23 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   if (!task || !isRunningOpenAITask(task)) return
 
   const timeoutMs = Math.max(0, timeoutSeconds * 1000)
-  const remainingMs = Math.max(0, timeoutMs - (Date.now() - task.createdAt))
+  const remainingMs = Math.max(0, timeoutMs - (Date.now() - (task.startedAt ?? task.createdAt)))
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
-    if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
+    if (failed && !isTaskHiddenByPrivacyMode(task)) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
   }, remainingMs)
   openAIWatchdogTimers.set(taskId, timer)
 }
 
-function usesConcurrentOpenAIImageRequests(profile: ApiProfile, params: TaskParams) {
+function usesConcurrentImageRequests(settings: AppSettings, profile: ApiProfile, params: TaskParams, hasInputImages: boolean) {
   const n = params.n > 0 ? params.n : 1
-  if (profile.provider !== 'openai' || n <= 1) return false
-  if (profile.apiMode === 'responses') return true
-  return profile.apiMode === 'images' && (profile.codexCli || profile.streamImages)
+  if (n <= 1) return false
+  if (profile.provider === 'openai') {
+    if (profile.apiMode === 'responses') return true
+    return profile.apiMode === 'images' && (profile.codexCli || profile.streamImages)
+  }
+  return profile.provider !== 'fal' && profile.codexCli && !isAsyncCustomProviderTask(settings, profile.provider, hasInputImages)
 }
 
 export function taskHasOutputErrors(task: Pick<TaskRecord, 'outputErrors'>) {
@@ -1793,7 +1292,7 @@ export function taskMatchesFilterStatus(task: TaskRecord, filterStatus: AppState
 export function taskMatchesSearchQuery(task: TaskRecord, query: string) {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  const prompt = (task.prompt || '').toLowerCase()
+  const prompt = getTaskPromptText(task.prompt || '', task.inputImageIds.length).toLowerCase()
   const paramStr = JSON.stringify(task.params).toLowerCase()
   const errorStr = [task.error, ...(task.outputErrors ?? []).map((item) => item.error)].filter(Boolean).join('\n').toLowerCase()
   return prompt.includes(q) || paramStr.includes(q) || errorStr.includes(q)
@@ -1823,27 +1322,22 @@ export function showCodexCliPrompt(force = false, reason = '接口返回的提�
 
 function getFalRecoveryProfile(settings: AppSettings, task: TaskRecord) {
   const taskProfile = getTaskApiProfile(settings, task)
-  if (taskProfile?.provider === 'fal') return taskProfile
+  if (taskProfile?.provider === 'fal' && task.apiProvider === 'fal') return taskProfile
   return null
 }
 
 function getCustomRecoveryProfile(settings: AppSettings, task: TaskRecord) {
-  const provider = task.apiProvider
-  if (!provider || provider === 'openai' || provider === 'fal') return null
   const taskProfile = getTaskApiProfile(settings, task)
-  if (taskProfile?.provider === provider) return taskProfile
+  if (taskProfile && taskProfile.provider === task.apiProvider && taskProfile.provider !== 'openai' && taskProfile.provider !== 'fal') return taskProfile
   return null
 }
 
 export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiProfile | null {
   const normalized = normalizeSettings(settings)
-  const provider = task.apiProvider
-
   if (!task.apiProfileId) return null
-
-  const byId = normalized.profiles.find((profile) => profile.id === task.apiProfileId)
-  if (byId && (!provider || byId.provider === provider)) return byId
-  return null
+  const profile = normalized.profiles.find((item) => item.id === task.apiProfileId)
+  // 任务记录的模型仍在配置的模型列表中时，沿用任务提交时的模型
+  return profile ? resolveApiProfileModel(profile, task.apiModel) : null
 }
 
 function createSettingsForApiProfile(settings: AppSettings, profile: ApiProfile): AppSettings {
@@ -1873,7 +1367,7 @@ function getAgentProfileValidationError(settings: AppSettings): { profile: ApiPr
 
   if (normalized.agentApiConfigMode === 'hybrid') {
     const imageProfile = getAgentImageApiProfile(normalized)
-    if (!imageProfile) return { profile: null, message: '图像模型 API 配置不存在，请在 Agent 配置页选择可用的图像模型配置。' }
+    if (!imageProfile) return { profile: null, message: '图像模型 API 配置不存在，请在「设置 → Agent 配置」中选择可用的图像模型配置。' }
     const imageProfileError = validateApiProfile(imageProfile)
     if (imageProfileError) return { profile: imageProfile, message: `图像模型 API 配置不完整：${imageProfileError}` }
   }
@@ -1881,9 +1375,10 @@ function getAgentProfileValidationError(settings: AppSettings): { profile: ApiPr
   return null
 }
 
-function getReusedTaskApiProfile(settings: AppSettings, profileId: string | null): ApiProfile | null {
+function getReusedTaskApiProfile(settings: AppSettings, profileId: string | null, model: string | null): ApiProfile | null {
   if (!profileId) return null
-  return normalizeSettings(settings).profiles.find((profile) => profile.id === profileId) ?? null
+  const profile = normalizeSettings(settings).profiles.find((item) => item.id === profileId)
+  return profile ? resolveApiProfileModel(profile, model ?? undefined) : null
 }
 
 function getTaskApiProfileName(task: TaskRecord) {
@@ -1892,11 +1387,13 @@ function getTaskApiProfileName(task: TaskRecord) {
 
 function isNetworkRecoverableError(err: unknown) {
   if (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') return true
+  if (err instanceof FetchConnectError) return true
   const message = err instanceof Error ? err.message : String(err)
   return /abort|network|failed to fetch|fetch failed|load failed|timeout|连接|断开|中断/i.test(message)
 }
 
 function isApiRequestNetworkError(err: unknown): boolean {
+  if (err instanceof FetchConnectError) return true
   if (err instanceof TypeError) {
     const message = err.message.toLowerCase()
     return /failed to fetch|fetch failed|load failed|networkerror|network request failed/i.test(message)
@@ -1918,14 +1415,23 @@ function getApiRequestNetworkErrorHint(
 
   const elapsedSeconds = Math.max(0, (Date.now() - createdAt) / 1000)
 
+  // 客户端的连接错误已由 Rust 侧给出具体原因，只有兜底的“无法连接到服务器”仍追加通用提示；
+  // 超时、域名解析等发生在建立连接时，与网关超时无关，只有连接被重置或未响应就关闭才可能是等待较久后被网关断开
+  if (err instanceof FetchConnectError && !err.message.startsWith('无法连接到服务器')) {
+    if (elapsedSeconds <= 15 || !/^(连接被服务器重置|服务器未返回响应就关闭了连接)/.test(err.message)) return null
+  }
+
   if (elapsedSeconds <= 15) {
-    if (usesApiProxy) {
+    // 客户端忽略已保存的代理设置
+    if (usesApiProxy && !isTauri) {
       return '提示：请求立即失败，请检查 API 代理服务是否正常运行。'
     }
     const unsupportedApiHint = profile?.provider === 'openai'
       ? `\n· API 不支持 ${getApiModeApiName(profile.apiMode)}`
       : ''
-    return `提示：请求立即失败，可能原因：\n· API 服务器不可达或地址有误，请检查 API URL 是否正确、服务是否正常运行${unsupportedApiHint}\n· 接口不支持浏览器跨域请求，可使用 Docker 部署版或本地运行版并配置 API 代理解决`
+    // 客户端不受跨域限制，不提示跨域原因
+    const corsHint = isTauri ? '' : '\n· 接口不支持浏览器跨域请求，可使用 Docker 部署版或本地运行版并配置 API 代理解决'
+    return `提示：请求立即失败，可能原因：\n· API 服务器不可达或地址有误，请检查 API URL 是否正确、服务是否正常运行${unsupportedApiHint}${corsHint}`
   }
 
   if (elapsedSeconds >= 55 && elapsedSeconds <= 75) {
@@ -1958,6 +1464,7 @@ function clearFalRecoveryTimer(taskId: string) {
 
 function scheduleFalRecovery(taskId: string, delayMs = FAL_RECOVERY_POLL_MS) {
   if (falRecoveryTimers.has(taskId)) return
+  if (!useStore.getState().tasks.some((task) => task.id === taskId)) return
   const timer = setTimeout(() => {
     falRecoveryTimers.delete(taskId)
     recoverFalTask(taskId)
@@ -1973,47 +1480,12 @@ function clearCustomRecoveryTimer(taskId: string) {
 
 function scheduleCustomRecovery(taskId: string, delayMs = CUSTOM_RECOVERY_POLL_MS) {
   if (customRecoveryTimers.has(taskId)) return
+  if (!useStore.getState().tasks.some((task) => task.id === taskId)) return
   const timer = setTimeout(() => {
     customRecoveryTimers.delete(taskId)
     recoverCustomTask(taskId)
   }, delayMs)
   customRecoveryTimers.set(taskId, timer)
-}
-
-function hasActualParams(params: Partial<TaskParams> | undefined): params is Partial<TaskParams> {
-  return Boolean(params && Object.keys(params).length > 0)
-}
-
-function firstActualParams(paramsList: Array<Partial<TaskParams> | undefined> | undefined): Partial<TaskParams> | undefined {
-  return paramsList?.find(hasActualParams)
-}
-
-function mapActualParamsByImage(outputIds: string[], paramsList: Array<Partial<TaskParams> | undefined> | undefined) {
-  const mapped = paramsList?.reduce<Record<string, Partial<TaskParams>>>((acc, params, index) => {
-    const imgId = outputIds[index]
-    if (imgId && hasActualParams(params)) acc[imgId] = params
-    return acc
-  }, {})
-  return mapped && Object.keys(mapped).length > 0 ? mapped : undefined
-}
-
-function getImageSizeParam(size: { width?: number; height?: number } | undefined): Partial<TaskParams> | undefined {
-  if (!size?.width || !size.height) return undefined
-  return { size: `${size.width}x${size.height}` }
-}
-
-function hasActualSizeParam(params: Partial<TaskParams> | undefined) {
-  return Boolean(params?.size)
-}
-
-function addImageSizeParam(
-  params: Partial<TaskParams> | undefined,
-  size: { width?: number; height?: number } | undefined,
-): Partial<TaskParams> | undefined {
-  if (hasActualSizeParam(params)) return params
-  const sizeParam = getImageSizeParam(size)
-  if (!sizeParam) return params
-  return { ...(params ?? {}), ...sizeParam }
 }
 
 async function readImageSizeParam(dataUrl: string): Promise<Partial<TaskParams> | undefined> {
@@ -2086,15 +1558,14 @@ async function completeRecoveredFalTask(task: TaskRecord, result: Awaited<Return
     actualParams: firstActualParams(actualParamsList),
     actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
     revisedPromptByImage: undefined,
-    status: 'done',
-    error: null,
+    ...createTaskDonePatch(task, Date.now()),
     falRecoverable: false,
-    finishedAt: Date.now(),
-    elapsed: Date.now() - task.createdAt,
   })
-  useStore.getState().showToast(`fal.ai 任务已恢复，共 ${outputIds.length} 张图片`, 'success')
-  if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `fal.ai 任务已恢复，共 ${outputIds.length} 张图片。`)
-  else void continueRecoveredAgentRound(task.id)
+  if (!isTaskHiddenByPrivacyMode(task)) {
+    useStore.getState().showToast(`fal.ai 任务已恢复，共 ${outputIds.length} 张图片`, 'success')
+    if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `fal.ai 任务已恢复，共 ${outputIds.length} 张图片。`)
+  }
+  if (isAgentTask(task)) void continueRecoveredAgentRound(task.id)
 }
 
 async function recoverFalTask(taskId: string) {
@@ -2114,20 +1585,20 @@ async function recoverFalTask(taskId: string) {
     await completeRecoveredFalTask(task, result)
     return
   } catch (err) {
+    if (!useStore.getState().tasks.some((item) => item.id === taskId)) return
     if (isNetworkRecoverableError(err)) {
       scheduleFalRecovery(taskId)
       return
     }
 
     clearFalRecoveryTimer(taskId)
+    const error = getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err))
     updateTaskInStore(taskId, {
-      status: 'error',
-      error: getFalErrorMessage(err) ?? (err instanceof Error ? err.message : String(err)),
+      ...createTaskErrorPatch(task, error, Date.now()),
       ...getRawErrorPayload(err),
       falRecoverable: false,
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
     })
+    showTaskFailureNotification(task)
     if (isAgentTask(task)) void continueRecoveredAgentRound(taskId)
   }
 }
@@ -2137,9 +1608,9 @@ export async function initStore() {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
-  let loadedAgentConversations = mergeAgentConversationsForStorage(storedAgentConversations, legacyAgentConversations)
+  let loadedAgentConversations = mergePersistedAgentConversations(storedAgentConversations, legacyAgentConversations)
   const currentAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
-  loadedAgentConversations = mergeAgentConversationsForStorage(loadedAgentConversations, currentAgentConversations)
+  loadedAgentConversations = mergePersistedAgentConversations(loadedAgentConversations, currentAgentConversations)
   const activeAgentConversationId = useStore.getState().activeAgentConversationId && loadedAgentConversations.some((conversation) => conversation.id === useStore.getState().activeAgentConversationId)
     ? useStore.getState().activeAgentConversationId
     : loadedAgentConversations[0]?.id ?? null
@@ -2170,7 +1641,7 @@ export async function initStore() {
   if (shouldRewritePersistedLocalState) {
     useStore.setState({})
   }
-  const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
+  const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks, Date.now())
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const favoriteState = useStore.getState()
   const normalizedFavorites = normalizeLoadedFavoriteState(markedTasks.map(getPersistableTask), favoriteState.favoriteCollections, favoriteState.defaultFavoriteCollectionId)
@@ -2186,21 +1657,10 @@ export async function initStore() {
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
   showSupportPromptForExistingLocalData(tasks)
+  // 客户端关闭确认用同样的判断跳过这些任务，它们重启后会继续查询结果
   for (const task of tasks) {
-    if (
-      task.apiProvider === 'fal' &&
-      task.falRequestId &&
-      task.falEndpoint &&
-      (task.status === 'running' || task.falRecoverable)
-    ) {
-      scheduleFalRecovery(task.id, 0)
-    }
-    if (
-      task.customTaskId &&
-      (task.status === 'running' || task.customRecoverable)
-    ) {
-      scheduleCustomRecovery(task.id, 0)
-    }
+    if (isFalRecoverableTask(task)) scheduleFalRecovery(task.id, 0)
+    if (isCustomRecoverableTask(task)) scheduleCustomRecovery(task.id, 0)
   }
 
   // 收集所有任务引用的图片 id
@@ -2236,7 +1696,13 @@ export async function initStore() {
       await deleteImage(imgId)
     }
   }
-  scheduleThumbnailBackfill(referencedImageIds)
+  const imageSourceUrls = useStore.getState().imageSourceUrls
+  if (Object.keys(imageSourceUrls).some((id) => !referencedIds.has(id))) {
+    useStore.setState({ imageSourceUrls: Object.fromEntries(Object.entries(imageSourceUrls).filter(([id]) => referencedIds.has(id))) })
+  }
+  void scheduleMissingThumbnailBackfill(referencedImageIds)
+  // 网页版旧数据的原图和缩略图以 dataUrl 字符串保存，首屏加载后在后台逐条转成 Blob
+  if (!isTauri) setTimeout(() => void migrateImagesToBlob(), 2_000)
 
   const restoredInputImages: InputImage[] = []
   for (const img of persistedInputImages) {
@@ -2269,13 +1735,11 @@ export async function initStore() {
         cacheImage(img.id, storedImage.dataUrl)
       }
     }
-    const shouldClearMask = Boolean(galleryInputDraft.maskDraft) && !restoredGalleryImages.some((img) => img.id === galleryInputDraft.maskDraft?.targetImageId)
     const restoredGalleryDraft: AgentInputDraft = {
       ...galleryInputDraft,
-      inputImages: restoredGalleryImages,
-      prompt: remapImageMentionsForOrder(galleryInputDraft.prompt, galleryInputDraft.inputImages, restoredGalleryImages),
-      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+      ...updateInputDraftImages(galleryInputDraft, restoredGalleryImages),
     }
+    const shouldClearMask = galleryInputDraft.maskDraft !== restoredGalleryDraft.maskDraft
     const galleryDraftsChanged =
       restoredGalleryImages.length !== galleryInputDraft.inputImages.length ||
       restoredGalleryImages.some((img, index) => img.dataUrl !== galleryInputDraft.inputImages[index]?.dataUrl) ||
@@ -2309,13 +1773,11 @@ export async function initStore() {
       }
     }
 
-    const shouldClearMask = Boolean(draft.maskDraft) && !restoredDraftImages.some((img) => img.id === draft.maskDraft?.targetImageId)
     const restoredDraft: AgentInputDraft = {
       ...draft,
-      inputImages: restoredDraftImages,
-      prompt: remapImageMentionsForOrder(draft.prompt, draft.inputImages, restoredDraftImages),
-      ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
+      ...updateInputDraftImages(draft, restoredDraftImages),
     }
+    const shouldClearMask = draft.maskDraft !== restoredDraft.maskDraft
     if (!isEmptyAgentInputDraft(restoredDraft)) restoredAgentInputDrafts[conversationId] = restoredDraft
     if (
       restoredDraftImages.length !== draft.inputImages.length ||
@@ -2336,19 +1798,32 @@ export async function initStore() {
   }
 }
 
-/** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
-    useStore.getState()
+/** 命令行直接给出的提示词和参考图：提交时不读写输入区、遮罩和复用配置状态；多条提示词按批量提交 */
+export interface SubmitInput {
+  prompts: string[]
+  inputImages: InputImage[]
+}
+
+/** 提交新任务，返回已开始的任务 id；批量提交时等全部任务结束后才返回 */
+export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean; input?: SubmitInput } = {}): Promise<string[]> {
+  const state = useStore.getState()
+  const { settings, params, showToast, setConfirmDialog } = state
+  const input = options.input
+  const prompt = input ? input.prompts[0] ?? '' : state.prompt
+  const inputImages = input?.inputImages ?? state.inputImages
+  const maskDraft = input ? null : state.maskDraft
+  const { reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, reusedTaskApiModel } = input
+    ? { reusedTaskApiProfileId: null, reusedTaskApiProfileName: null, reusedTaskApiProfileMissing: false, reusedTaskApiModel: null }
+    : state
 
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
   if (isMianyunImageProvider(activeProfile.provider)) {
-    activeProfile = { ...activeProfile, model: getImageModelForResolution(normalizedSettings.imageGenerationMode, params.resolution) }
+    activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution) }
   }
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
-    const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
+    const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId, reusedTaskApiModel)
     if (!reusedProfile) {
       if (options.useCurrentApiProfileWhenReusedMissing) {
         useStore.getState().setReusedTaskApiProfile(null)
@@ -2362,12 +1837,12 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
         void submitTask({ ...options, useCurrentApiProfileWhenReusedMissing: true })
       },
         })
-        return
+        return []
       }
     } else {
       activeProfile = reusedProfile
       if (isMianyunImageProvider(activeProfile.provider)) {
-        activeProfile = { ...activeProfile, model: getImageModelForResolution(normalizedSettings.imageGenerationMode, params.resolution) }
+        activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution) }
       }
       requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
     }
@@ -2376,13 +1851,23 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   if (validateApiProfile(activeProfile)) {
     showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
     useStore.getState().setShowSettings(true)
-    return
+    return []
   }
 
   if (!prompt.trim()) {
     showToast('请输入提示词', 'error')
-    return
+    return []
   }
+
+  const batchPrompts = input && input.prompts.length > 1
+    ? input.prompts
+    : normalizedSettings.showBatchPrompt && normalizedSettings.batchPromptEnabled ? splitBatchPrompts(prompt) : []
+  if (useStore.getState().batchProgress) {
+    showToast('批量任务进行中，请等待完成或停止后再提交', 'error')
+    return []
+  }
+  // 检查通过后立即占位，避免后续 await 期间重复提交启动第二批
+  const batchId = batchPrompts.length ? beginBatch(batchPrompts.length) : 0
 
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
@@ -2402,7 +1887,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
             void submitTask({ allowFullMask: true })
           },
         })
-        return
+        endBatch(batchId)
+        return []
       }
       maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
       cacheImage(maskImageId, maskDraft.maskDataUrl)
@@ -2412,64 +1898,173 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
         useStore.getState().clearMaskDraft()
       }
       showToast(err instanceof Error ? err.message : String(err), 'error')
-      return
+      endBatch(batchId)
+      return []
     }
   }
 
   // 持久化输入图片到 IndexedDB（此前只在内存缓存中）
-  for (const img of orderedInputImages) {
-    await storeImage(img.dataUrl)
+  try {
+    for (const img of orderedInputImages) {
+      await storeImage(img.dataUrl)
+    }
+  } catch (err) {
+    console.error('保存参考图失败', err)
+    endBatch(batchId)
+    showToast(`保存参考图失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+    return []
   }
 
   const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
-  const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+  const shouldUseTransparentOutput = (normalizedParams.output_format === 'png' || normalizedParams.output_format === 'webp') && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output
-    ? createTransparentOutputMeta(prompt.trim())
-    : null
   const normalizedParamPatch = getChangedParams(params, taskParams)
   if (Object.keys(normalizedParamPatch).length) {
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
-    prompt: prompt.trim(),
-    params: taskParams,
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
-    maskTargetImageId,
-    maskImageId,
-    transparentOutput: transparentMeta?.transparentOutput,
-    transparentPrompt: transparentMeta?.effectivePrompt,
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
+  // 命令行提交与当前界面无关，不加入收藏夹
+  const saveToFavorite = !input && normalizedSettings.saveTasksToActiveFavoriteCollection
+  const taskIds: string[] = []
+  const startTask = async (taskPrompt: string) => {
+    // 按点击提交时所在的收藏夹页决定；创建时该收藏夹已被删除则加入默认收藏夹
+    const favoritePatch = saveToFavorite
+      ? getNewTaskFavoritePatch({
+        filterFavorite: state.filterFavorite,
+        activeFavoriteCollectionId: state.activeFavoriteCollectionId,
+        favoriteCollections: useStore.getState().favoriteCollections,
+        defaultFavoriteCollectionId: useStore.getState().defaultFavoriteCollectionId,
+      })
+      : null
+    const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
+      ? createTransparentOutputMeta(taskPrompt)
+      : null
+    const task: TaskRecord = {
+      id: genId(),
+      prompt: taskPrompt,
+      params: taskParams,
+      apiProvider: activeProfile.provider,
+      apiProfileId: activeProfile.id,
+      apiProfileName: activeProfile.name,
+      apiMode: activeProfile.apiMode,
+      apiModel: activeProfile.model,
+      inputImageIds: orderedInputImages.map((i) => i.id),
+      maskTargetImageId,
+      maskImageId,
+      transparentOutput: transparentMeta?.transparentOutput,
+      transparentPrompt: transparentMeta?.effectivePrompt,
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt: Date.now(),
+      finishedAt: null,
+      elapsed: null,
+      ...favoritePatch,
+    }
+
+    useStore.getState().setTasks([task, ...useStore.getState().tasks])
+    await putTask(task)
+    if (batchId) batchTaskIds.add(task.id)
+    taskIds.push(task.id)
+    // 异步调用 API
+    executeTask(task.id)
+    return task.id
   }
 
-  const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
-  useStore.getState().showToast('任务已提交', 'success')
-
-  if (settings.clearInputAfterSubmit) {
-    useStore.getState().setPrompt('')
-    useStore.getState().clearInputImages()
+  if (batchPrompts.length) {
+    useStore.getState().showToast(`已开始批量提交 ${batchPrompts.length} 条提示词`, 'success')
+  } else {
+    await startTask(prompt.trim())
+    useStore.getState().showToast('任务已提交', 'success')
   }
-  useStore.getState().setReusedTaskApiProfile(null)
 
-  // 异步调用 API
-  executeTask(taskId)
+  if (!input) {
+    if (settings.clearInputAfterSubmit) {
+      useStore.getState().setPrompt('')
+      useStore.getState().clearInputImages()
+    }
+    useStore.getState().setReusedTaskApiProfile(null)
+  }
+
+  if (batchPrompts.length) {
+    const limit = normalizedSettings.batchPromptMode === 'queue'
+      ? 1
+      : normalizedSettings.batchPromptConcurrencyLimited ? normalizedSettings.batchPromptConcurrency : batchPrompts.length
+    await runBatchPrompts(batchId, batchPrompts, limit, startTask)
+  }
+  return taskIds
+}
+
+// 当前批量的标识，停止或结束时递增使旧批量失效；批量任务不单独弹出完成提示和失败详情
+let activeBatchId = 0
+const batchTaskIds = new Set<string>()
+
+function beginBatch(total: number) {
+  activeBatchId += 1
+  useStore.getState().setBatchProgress({ total, started: 0, finished: 0 })
+  return activeBatchId
+}
+
+function endBatch(batchId: number) {
+  if (!batchId || batchId !== activeBatchId) return
+  activeBatchId += 1
+  // 停止后仍在运行的任务恢复单独的完成提示和失败详情
+  batchTaskIds.clear()
+  useStore.getState().setBatchProgress(null)
+}
+
+/** 等待任务结束（完成、失败或被删除）或批量被停止；断线待恢复的任务也视为结束，避免卡住队列 */
+export function waitForTaskSettled(taskId: string, isCancelled: () => boolean) {
+  const isSettled = (tasks: TaskRecord[]) => isCancelled() || tasks.find((item) => item.id === taskId)?.status !== 'running'
+  return new Promise<void>((resolve) => {
+    if (isSettled(useStore.getState().tasks)) {
+      resolve()
+      return
+    }
+    const unsubscribe = useStore.subscribe((state) => {
+      if (!isSettled(state.tasks)) return
+      unsubscribe()
+      resolve()
+    })
+  })
+}
+
+async function runBatchPrompts(batchId: number, prompts: string[], limit: number, startTask: (taskPrompt: string) => Promise<string>) {
+  const isStopped = () => batchId !== activeBatchId
+  const total = prompts.length
+  let started = 0
+  let finished = 0
+  let failed = 0
+  await runWithConcurrency(prompts, limit, async (taskPrompt) => {
+    started += 1
+    useStore.getState().setBatchProgress({ total, started, finished })
+    try {
+      const taskId = await startTask(taskPrompt)
+      await waitForTaskSettled(taskId, isStopped)
+      if (useStore.getState().tasks.find((item) => item.id === taskId)?.status === 'error') failed += 1
+    } catch (err) {
+      failed += 1
+      console.error('批量提交任务失败', err)
+    }
+    finished += 1
+    if (!isStopped()) useStore.getState().setBatchProgress({ total, started, finished })
+  }, isStopped)
+  if (isStopped()) return
+
+  endBatch(batchId)
+  const message = failed > 0 ? `批量生成完成：成功 ${total - failed} 条，失败 ${failed} 条` : `批量生成完成，共 ${total} 条`
+  useStore.getState().showToast(message, failed > 0 ? 'error' : 'success')
+  showTaskCompletionNotification('批量生成完成', `${message}。`)
+}
+
+/** 停止批量提交：立即结束批量状态，不再启动剩余提示词，已开始的任务继续执行 */
+export function stopBatchPrompts() {
+  const progress = useStore.getState().batchProgress
+  if (!progress) return
+  endBatch(activeBatchId)
+  useStore.getState().showToast(`已停止批量提交，共提交 ${progress.started} / ${progress.total} 条，已开始的任务会继续完成`, 'info')
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -2491,6 +2086,12 @@ function updateAgentConversation(conversationId: string, updater: (conversation:
 
 function getAgentRoundControllerKey(conversationId: string, roundId: string) {
   return `${conversationId}:${roundId}`
+}
+
+function getDeletedActiveAgentTasks(conversationId: string, roundId: string, controller: AbortController) {
+  return Array.from(deletedActiveAgentTasks.values())
+    .filter((entry) => entry.controller === controller && entry.task.agentConversationId === conversationId && entry.task.agentRoundId === roundId)
+    .map((entry) => entry.task)
 }
 
 function createAgentAbortError() {
@@ -2525,12 +2126,10 @@ function markAgentRoundTasksStopped(conversationId: string, roundId: string, now
     clearFalRecoveryTimer(task.id)
     clearCustomRecoveryTimer(task.id)
     updateTaskInStore(task.id, {
-      status: 'error',
-      error: AGENT_STOPPED_MESSAGE,
+      ...createTaskErrorPatch(task, AGENT_STOPPED_MESSAGE, now),
       falRecoverable: false,
       customRecoverable: false,
-      finishedAt: now,
-      elapsed: Math.max(0, now - task.createdAt),
+      elapsed: Math.max(0, now - (task.startedAt ?? task.createdAt)),
     })
   }
   return runningTasks.length > 0
@@ -2554,13 +2153,11 @@ function markAgentRoundTasksFailed(
   for (const task of runningTasks) {
     useStore.getState().setTaskStreamPreview(task.id)
     updateTaskInStore(task.id, {
-      status: 'error',
-      error,
+      ...createTaskErrorPatch(task, error, now),
       ...(rawResponsePayload ? { rawResponsePayload } : {}),
       falRecoverable: false,
       customRecoverable: false,
-      finishedAt: now,
-      elapsed: Math.max(0, now - task.createdAt),
+      elapsed: Math.max(0, now - (task.startedAt ?? task.createdAt)),
     })
   }
   return runningTasks.length > 0
@@ -2649,7 +2246,7 @@ async function generateAgentConversationTitle(
 
     updateAgentConversation(conversationId, (current) => {
       const firstRound = current.rounds[0]
-      if (!firstRound || firstRound.prompt !== prompt || current.title !== fallbackTitle) return current
+      if (!firstRound || stripImageMentionMarkers(firstRound.prompt) !== prompt || current.title !== fallbackTitle) return current
       return { ...current, title, updatedAt: Date.now() }
     })
   } catch {
@@ -2682,150 +2279,6 @@ export function stopAgentResponse(conversationId = useStore.getState().activeAge
 
   markAgentRoundStopped(conversationId, runningRound.id)
   useStore.getState().showToast('已停止生成', 'info')
-}
-
-function getAgentRoundChildren(conversation: AgentConversation, parentRoundId: string | null) {
-  return conversation.rounds.filter((round) => (round.parentRoundId ?? null) === parentRoundId)
-}
-
-function getLatestAgentLeafId(conversation: AgentConversation, startRoundId: string | null = null): string | null {
-  let currentId = startRoundId
-  if (!currentId) {
-    const roots = getAgentRoundChildren(conversation, null)
-    currentId = roots[roots.length - 1]?.id ?? null
-  }
-
-  while (currentId) {
-    const children = getAgentRoundChildren(conversation, currentId)
-    const nextId = children[children.length - 1]?.id ?? null
-    if (!nextId) return currentId
-    currentId = nextId
-  }
-
-  return null
-}
-
-export function getAgentRoundPath(conversation: AgentConversation, roundId: string | null): AgentRound[] {
-  if (!roundId) return []
-  const byId = new Map(conversation.rounds.map((round) => [round.id, round]))
-  const path: AgentRound[] = []
-  const seen = new Set<string>()
-  let current = byId.get(roundId) ?? null
-
-  while (current && !seen.has(current.id)) {
-    seen.add(current.id)
-    path.unshift(current)
-    current = current.parentRoundId ? byId.get(current.parentRoundId) ?? null : null
-  }
-
-  return path
-}
-
-export function getActiveAgentRounds(conversation: AgentConversation): AgentRound[] {
-  const activeRoundId = conversation.activeRoundId && conversation.rounds.some((round) => round.id === conversation.activeRoundId)
-    ? conversation.activeRoundId
-    : getLatestAgentLeafId(conversation)
-  return getAgentRoundPath(conversation, activeRoundId ?? null)
-}
-
-function reindexAgentRounds(conversation: AgentConversation): AgentConversation {
-  const indexById = new Map<string, number>()
-  const visit = (parentRoundId: string | null, depth: number) => {
-    for (const child of getAgentRoundChildren(conversation, parentRoundId)) {
-      indexById.set(child.id, depth)
-      visit(child.id, depth + 1)
-    }
-  }
-  visit(null, 1)
-  return {
-    ...conversation,
-    rounds: conversation.rounds.map((round) => ({
-      ...round,
-      index: indexById.get(round.id) ?? round.index,
-    })),
-  }
-}
-
-export function remapAgentRoundMentionsForPathChange(content: string, oldPath: AgentRound[], newPath: AgentRound[]) {
-  if (!content || oldPath.length === 0) return content
-  const newIndexByRoundId = new Map(newPath.map((round, index) => [round.id, index + 1]))
-  return content.replace(AGENT_ROUND_IMAGE_MENTION_RE, (match, roundNumber: string, imageNumber: string) => {
-    const oldRound = oldPath[Number(roundNumber) - 1]
-    if (!oldRound) return match
-    const newRoundIndex = newIndexByRoundId.get(oldRound.id)
-    if (!newRoundIndex) return `@已删除轮次图${imageNumber}`
-    return `@第${newRoundIndex}轮图${imageNumber}`
-  })
-}
-
-export function deleteAgentRoundFromConversation(conversation: AgentConversation, roundId: string, now = Date.now()): AgentConversation {
-  const targetRound = conversation.rounds.find((round) => round.id === roundId)
-  if (!targetRound) return conversation
-
-  const oldPathByRoundId = new Map(conversation.rounds.map((round) => [round.id, getAgentRoundPath(conversation, round.id)]))
-  const rounds = conversation.rounds
-    .filter((candidate) => candidate.id !== roundId)
-    .map((candidate) =>
-      candidate.parentRoundId === roundId
-        ? { ...candidate, parentRoundId: targetRound.parentRoundId ?? null }
-        : candidate,
-    )
-  const messages = conversation.messages.filter((candidate) => candidate.roundId !== roundId)
-  const nextConversation = reindexAgentRounds({
-    ...conversation,
-    rounds,
-    messages,
-    activeRoundId: conversation.activeRoundId === roundId ? null : conversation.activeRoundId ?? null,
-  })
-  const newPathByRoundId = new Map(nextConversation.rounds.map((round) => [round.id, getAgentRoundPath(nextConversation, round.id)]))
-  const remappedMessages = nextConversation.messages.map((message) => {
-    if (!message.roundId) return message
-    const oldPath = oldPathByRoundId.get(message.roundId) ?? []
-    const newPath = newPathByRoundId.get(message.roundId) ?? []
-    const content = remapAgentRoundMentionsForPathChange(message.content, oldPath, newPath)
-    return content === message.content ? message : { ...message, content }
-  })
-  const withRemappedMessages = { ...nextConversation, messages: remappedMessages }
-  const activeRounds = getActiveAgentRounds(withRemappedMessages)
-  return {
-    ...withRemappedMessages,
-    activeRoundId: withRemappedMessages.activeRoundId ?? activeRounds[activeRounds.length - 1]?.id ?? null,
-    updatedAt: now,
-  }
-}
-
-export function getAgentSiblingRounds(conversation: AgentConversation, round: AgentRound) {
-  return getAgentRoundChildren(conversation, round.parentRoundId ?? null)
-}
-
-export function getAgentBranchLeafId(conversation: AgentConversation, roundId: string) {
-  return getLatestAgentLeafId(conversation, roundId) ?? roundId
-}
-
-function uniqueIds(ids: string[]) {
-  return Array.from(new Set(ids.filter(Boolean)))
-}
-
-export function getAgentRoundTaskIds(round: AgentRound, tasks: TaskRecord[]) {
-  const existingTaskIds = new Set(tasks.map((task) => task.id))
-  return uniqueIds([
-    ...round.outputTaskIds,
-    ...tasks
-      .filter((task) => task.agentRoundId === round.id)
-      .map((task) => task.id),
-  ]).filter((taskId) => existingTaskIds.has(taskId))
-}
-
-export function getAgentConversationTaskIds(conversation: AgentConversation | null | undefined, tasks: TaskRecord[]) {
-  if (!conversation) return []
-  const existingTaskIds = new Set(tasks.map((task) => task.id))
-  const roundIds = new Set(conversation.rounds.map((round) => round.id))
-  return uniqueIds([
-    ...conversation.rounds.flatMap((round) => round.outputTaskIds),
-    ...tasks
-      .filter((task) => task.agentConversationId === conversation.id || Boolean(task.agentRoundId && roundIds.has(task.agentRoundId)))
-      .map((task) => task.id),
-  ]).filter((taskId) => existingTaskIds.has(taskId))
 }
 
 function addAgentReferencedImageIds(target: Set<string>, conversations = useStore.getState().agentConversations, inputDrafts = useStore.getState().agentInputDrafts) {
@@ -2874,7 +2327,9 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
         cacheImage(original.id, dataUrl)
 
         try {
-          outputDataUrl = await removeKeyedBackgroundFromDataUrl(dataUrl)
+          outputDataUrl = task.params.output_format === 'webp'
+            ? await removeKeyedBackgroundFromDataUrl(dataUrl, undefined, 'webp', task.params.output_compression)
+            : await removeKeyedBackgroundFromDataUrl(dataUrl)
           transparentOriginalImageIds.push(original.id)
         } catch (err) {
           console.warn('透明背景后处理失败，已回退为原始输出', err)
@@ -2910,8 +2365,8 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
 
-  const { tasks, inputImages, galleryInputDraft } = useStore.getState()
-  const stillUsed = new Set<string>()
+  const { tasks, inputImages, galleryInputDraft, privacyMode } = useStore.getState()
+  const stillUsed = new Set<string>(getPrivacySnapshotImageIds(privacyMode))
   for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
   addAgentReferencedImageIds(stillUsed)
   addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
@@ -2919,19 +2374,17 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
 
   for (const imgId of candidates) {
     if (stillUsed.has(imgId)) continue
-    await deleteImage(imgId)
-    imageCache.delete(imgId)
-    thumbnailCache.delete(imgId)
+    await deleteStoredImageIfUnreferenced(imgId)
   }
 }
 
-async function persistTaskStreamPartialImage(taskId: string, dataUrl: string) {
+async function persistTaskStreamPartialImage(taskId: string, dataUrl: string, execution?: symbol) {
   try {
     const imgId = await storeImage(dataUrl, 'generated')
     cacheImage(imgId, dataUrl)
 
     const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
-    if (!latestTask || latestTask.status === 'done') {
+    if (!latestTask || latestTask.status === 'done' || (execution && taskExecutions.get(taskId) !== execution)) {
       await deleteUnreferencedImageIds([imgId])
       return
     }
@@ -2953,444 +2406,82 @@ async function readAgentImageDataUrls(ids: string[]) {
   return dataUrls
 }
 
-async function createAgentUserInputItem(conversation: AgentConversation, round: AgentRound, message: AgentMessage, tasks: TaskRecord[]) {
-  const imageDataUrls = await readAgentImageDataUrls(round.inputImageIds)
-  const rounds = getAgentRoundPath(conversation, round.id)
-  const text = replaceAgentPromptImageReferencesForApi(message.content, round, rounds, tasks)
-  const referenceText = round.inputImageIds.length > 0
-    ? `\n\n<available_refs>${round.inputImageIds.map((_, index) => `\n  <ref id="${getAgentCurrentReferenceId(round, index)}" />`).join('')}\n</available_refs>`
-    : ''
-  return {
-    role: 'user',
-    content: [
-      { type: 'input_text', text: `${text}${referenceText}` },
-      ...imageDataUrls.map((dataUrl) => ({ type: 'input_image', image_url: dataUrl })),
-    ],
+function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[]) {
+  const deletedByRound = new Map<string, TaskRecord[]>()
+  const affectedConversationIds = new Set<string>()
+  for (const task of deletedTasks) {
+    if (task.sourceMode !== 'agent' || !task.agentConversationId || !task.agentRoundId) continue
+    const key = getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId)
+    deletedByRound.set(key, [...(deletedByRound.get(key) ?? []), task])
+    affectedConversationIds.add(task.agentConversationId)
   }
-}
+  if (deletedByRound.size === 0) return { updatedTasks: [], updatedConversations: [] }
 
-async function createAgentGeneratedImagesInputItem(round: AgentRound, tasks: TaskRecord[]) {
-  const contentParts: Array<{ type: string; text?: string; image_url?: string }> = []
-  let imageIndex = 0
-  for (const taskId of round.outputTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task) {
-      contentParts.push({ type: 'input_text', text: `<removed_ref id="${getAgentGeneratedImageReferenceId(round, imageIndex)}" />` })
-      imageIndex += 1
-      continue
+  const updatedTasks: TaskRecord[] = []
+  const updatedConversations: AgentConversation[] = []
+  useStore.setState((state) => {
+    const tasksByRound = new Map<string, TaskRecord[]>()
+    for (const task of [...state.tasks, ...deletedTasks]) {
+      if (!task.agentConversationId || !task.agentRoundId) continue
+      const key = getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId)
+      if (!deletedByRound.has(key)) continue
+      tasksByRound.set(key, [...(tasksByRound.get(key) ?? []), task])
     }
-    for (const imageId of task.outputImages) {
-      const dataUrl = await ensureImageCached(imageId)
-      if (dataUrl) {
-        contentParts.push({ type: 'input_image', image_url: dataUrl })
-      }
-      const refId = getAgentGeneratedImageReferenceId(round, imageIndex)
-      const prompt = truncateAgentReferencePrompt(task.prompt || '')
-      const promptAttribute = prompt ? ` prompt="${escapeXmlAttribute(prompt)}"` : ''
-      contentParts.push({ type: 'input_text', text: `<ref id="${refId}"${promptAttribute} />` })
-      imageIndex += 1
-    }
-  }
-  if (contentParts.length === 0) return null
-  return { role: 'user', content: contentParts }
-}
-
-async function createAgentBatchImagesInputItem(round: AgentRound, tasks: TaskRecord[], batchTaskIds: string[]) {
-  const contentParts: Array<{ type: string; text?: string; image_url?: string }> = []
-  // Count existing images in the round to compute correct imageIndex offset
-  let baseImageIndex = 0
-  for (const taskId of round.outputTaskIds) {
-    if (batchTaskIds.includes(taskId)) break
-    const task = tasks.find((item) => item.id === taskId)
-    baseImageIndex += task ? task.outputImages.length : 1
-  }
-  let imageIndex = baseImageIndex
-  for (const taskId of batchTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    if (!task || task.status !== 'done') continue
-    for (const imgId of task.outputImages) {
-      const dataUrl = await ensureImageCached(imgId)
-      if (dataUrl) {
-        contentParts.push({ type: 'input_image', image_url: dataUrl })
-      }
-      const refId = getAgentGeneratedImageReferenceId(round, imageIndex)
-      const prompt = truncateAgentReferencePrompt(task.prompt || '')
-      const promptAttribute = prompt ? ` prompt="${escapeXmlAttribute(prompt)}"` : ''
-      contentParts.push({ type: 'input_text', text: `<ref id="${refId}"${promptAttribute} />` })
-      imageIndex += 1
-    }
-  }
-  if (contentParts.length === 0) return null
-  return { role: 'user', content: contentParts }
-}
-
-function escapeXmlAttribute(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function truncateAgentReferencePrompt(prompt: string) {
-  const normalized = prompt.replace(/\s+/g, ' ').trim()
-  return normalized.length > 1200 ? `${normalized.slice(0, 1200)}...` : normalized
-}
-
-function createAgentAssistantFallbackItem(text: string) {
-  return {
-    role: 'assistant',
-    content: [{ type: 'output_text', text }],
-  }
-}
-
-function parseResponseOutputFromPayload(rawResponsePayload?: string): ResponsesOutputItem[] | null {
-  if (!rawResponsePayload) return null
-  try {
-    const payload = JSON.parse(rawResponsePayload) as { output?: unknown }
-    return Array.isArray(payload.output) ? payload.output as ResponsesOutputItem[] : null
-  } catch {
-    return null
-  }
-}
-
-function sanitizeResponseOutputItemForInput(item: ResponsesOutputItem): unknown | null {
-  if (item.type === 'web_search_call') return null
-  if (item.type === 'image_generation_call') return null
-
-  if (item.type === 'message') {
-    const content = (item.content ?? [])
-      .map((part) => {
-        if (typeof part.text !== 'string') return null
-        if (part.type === 'output_text' || part.type === 'text') {
-          return { type: 'output_text', text: part.text }
-        }
-        return null
+    const roundsByKey = new Map<string, AgentRound>()
+    let conversationsChanged = false
+    const agentConversations = state.agentConversations.map((conversation) => {
+      if (!affectedConversationIds.has(conversation.id)) return conversation
+      let changed = false
+      const rounds = conversation.rounds.map((round) => {
+        const key = getAgentRoundControllerKey(conversation.id, round.id)
+        const roundDeletedTasks = deletedByRound.get(key)
+        if (!roundDeletedTasks) return round
+        roundsByKey.set(key, round)
+        if (!round.responseOutput?.length) return round
+        const responseOutput = scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks, tasksByRound.get(key) ?? roundDeletedTasks)
+        if (responseOutput === round.responseOutput) return round
+        changed = true
+        return { ...round, responseOutput }
       })
-      .filter((part): part is { type: 'output_text'; text: string } => Boolean(part))
-
-    return content.length > 0 ? { role: 'assistant', content } : null
-  }
-
-  return item
-}
-
-function filterAgentRoundResponseOutputForInput(_round: AgentRound, _tasks: TaskRecord[], output: ResponsesOutputItem[]) {
-  // image_generation_call items are now dropped by sanitizeResponseOutputItemForInput;
-  // this filter is kept as a structural pass-through for future use.
-  return output
-}
-
-function scrubResponseOutputForDeletedAgentTasks(round: AgentRound, output: ResponsesOutputItem[], deletedTasks: TaskRecord[]) {
-  const deletedTaskIds = new Set(deletedTasks.map((task) => task.id))
-  const deletedToolCallIds = new Set(
-    deletedTasks
-      .filter((task) => task.agentRoundId === round.id && task.agentToolCallId)
-      .map((task) => task.agentToolCallId!),
-  )
-  if (deletedTaskIds.size === 0) return output
-
-  let anonymousImageIndex = 0
-  return output.filter((item) => {
-    if (item.type !== 'image_generation_call') return true
-
-    if (typeof item.id === 'string' && item.id) {
-      return !deletedToolCallIds.has(item.id)
+      if (!changed) return conversation
+      conversationsChanged = true
+      const updated = { ...conversation, rounds }
+      updatedConversations.push(updated)
+      return updated
+    })
+    const tasks = state.tasks.map((task) => {
+      if (!task.agentConversationId || !task.agentRoundId) return task
+      const key = getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId)
+      const roundDeletedTasks = deletedByRound.get(key)
+      if (!roundDeletedTasks) return task
+      const round = roundsByKey.get(key)
+      if (!round) return task
+      const scrubbed = scrubTaskRawResponsePayloadForDeletedTasks(task, round, roundDeletedTasks, tasksByRound.get(key) ?? roundDeletedTasks)
+      if (scrubbed.rawResponsePayload === task.rawResponsePayload) return task
+      updatedTasks.push(scrubbed)
+      return scrubbed
+    })
+    if (!conversationsChanged && updatedTasks.length === 0) return state
+    return {
+      ...(conversationsChanged ? { agentConversations } : {}),
+      ...(updatedTasks.length > 0 ? { tasks } : {}),
     }
-
-    const taskId = round.outputTaskIds[anonymousImageIndex]
-    anonymousImageIndex += 1
-    return !deletedTaskIds.has(taskId)
   })
+  return { updatedTasks, updatedConversations }
 }
 
-function scrubAgentConversationsForDeletedTasks(conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
-  if (deletedTasks.length === 0) return conversations
-
-  return conversations.map((conversation) => ({
-    ...conversation,
-    rounds: conversation.rounds.map((round) => {
-      const roundDeletedTasks = deletedTasks.filter((task) => round.outputTaskIds.includes(task.id))
-      if (roundDeletedTasks.length === 0 || !round.responseOutput?.length) return round
-      return {
-        ...round,
-        responseOutput: scrubResponseOutputForDeletedAgentTasks(round, round.responseOutput, roundDeletedTasks),
-      }
-    }),
-  }))
-}
-
-function scrubTaskRawResponsePayloadForDeletedTasks(task: TaskRecord, conversations: AgentConversation[], deletedTasks: TaskRecord[]) {
-  if (!task.rawResponsePayload || !task.agentRoundId) return task
-
-  const round = conversations
-    .flatMap((conversation) => conversation.rounds)
-    .find((item) => item.id === task.agentRoundId)
-  if (!round) return task
-
-  const roundDeletedTasks = deletedTasks.filter((item) => round.outputTaskIds.includes(item.id))
-  if (roundDeletedTasks.length === 0) return task
-
+async function persistTaskDeletionCleanup(deletedTaskIds: string[], cleanup: ReturnType<typeof scrubAgentOutputPayloadsForDeletedTasks>) {
+  const tasks = cleanup.updatedTasks.map(getPersistableTask)
+  const conversations = cleanup.updatedConversations.map(getPersistableAgentConversation)
   try {
-    const payload = JSON.parse(task.rawResponsePayload) as ResponsesApiResponse
-    if (!Array.isArray(payload.output)) return task
-    const output = scrubResponseOutputForDeletedAgentTasks(round, payload.output, roundDeletedTasks)
-    if (output.length === payload.output.length) return task
-    return { ...task, rawResponsePayload: JSON.stringify({ ...payload, output }, null, 2) }
-  } catch {
-    return task
-  }
-}
-
-async function scrubAgentOutputPayloadsForDeletedTasks(deletedTasks: TaskRecord[], remainingTasks: TaskRecord[]) {
-  if (deletedTasks.length === 0) return remainingTasks
-
-  const conversations = scrubAgentConversationsForDeletedTasks(useStore.getState().agentConversations, deletedTasks)
-  const scrubbedTasks = remainingTasks.map((task) => scrubTaskRawResponsePayloadForDeletedTasks(task, conversations, deletedTasks))
-  useStore.setState({ agentConversations: conversations })
-
-  for (const task of scrubbedTasks) {
-    const previous = remainingTasks.find((item) => item.id === task.id)
-    if (previous?.rawResponsePayload !== task.rawResponsePayload) await putTask(task)
-  }
-
-  return scrubbedTasks
-}
-
-function sanitizeResponseOutputForInput(output: ResponsesOutputItem[], options: { allowPendingFunctionCalls?: boolean } = {}) {
-  const items = output
-    .map(sanitizeResponseOutputItemForInput)
-    .filter((item): item is unknown => item != null)
-  if (options.allowPendingFunctionCalls) return items
-
-  const functionCallIds = new Set<string>()
-  const functionOutputCallIds = new Set<string>()
-  for (const item of items) {
-    if (!isRecord(item)) continue
-    const callId = typeof item.call_id === 'string' ? item.call_id : ''
-    if (!callId) continue
-    if (item.type === 'function_call') functionCallIds.add(callId)
-    if (item.type === 'function_call_output') functionOutputCallIds.add(callId)
-  }
-
-  return items.filter((item) => {
-    if (!isRecord(item)) return true
-    const callId = typeof item.call_id === 'string' ? item.call_id : ''
-    if (item.type === 'function_call') return callId && functionOutputCallIds.has(callId)
-    if (item.type === 'function_call_output') return callId && functionCallIds.has(callId)
-    return true
-  })
-}
-
-function mergeResponseOutputItems(previous: ResponsesOutputItem[], next: ResponsesOutputItem[]) {
-  const merged = [...previous]
-  for (const item of next) {
-    const index = item.id ? merged.findIndex((existing) => existing.id === item.id) : -1
-    if (index >= 0) merged[index] = item
-    else merged.push(item)
-  }
-  return merged
-}
-
-function countResponseToolCalls(output: ResponsesOutputItem[]) {
-  return output.filter((item) => item.type === 'image_generation_call').length
-}
-
-function createAgentContinuationInputItem(newImageRefs: string[], toolCallsUsed: number, maxToolCalls: number) {
-  const lines = [
-    '[System] The app has saved your generated outputs and is continuing the same Agent turn.',
-  ]
-  if (newImageRefs.length > 0) {
-    lines.push(
-      `The following image ref ids are now available for you to reference in subsequent image_generation prompts: ${newImageRefs.join(', ')}`,
-    )
-  }
-  lines.push(
-    'Continue generating. Do NOT repeat what you already said in earlier responses.',
-    'If you still need another round after this (e.g. more dependent images), call continue_generation.',
-    `Tool-call budget: ${toolCallsUsed}/${maxToolCalls} used.`,
-  )
-  return {
-    role: 'user',
-    content: [{
-      type: 'input_text',
-      text: lines.join('\n'),
-    }],
-  }
-}
-
-function buildAgentContinuationInput(baseInput: unknown[], round: AgentRound, tasks: TaskRecord[], currentRoundOutput: ResponsesOutputItem[], toolCallsUsed: number, maxToolCalls: number) {
-  const input = [...baseInput, ...sanitizeResponseOutputForInput(currentRoundOutput, { allowPendingFunctionCalls: true })]
-  const newImageRefs = collectAgentRoundOutputImageSlots(round, tasks)
-    .map((imageId, index) => imageId ? `<ref id="${getAgentGeneratedImageReferenceId(round, index)}" />` : null)
-    .filter((ref): ref is string => Boolean(ref))
-  input.push(createAgentContinuationInputItem(newImageRefs, toolCallsUsed, maxToolCalls))
-  return input
-}
-
-function getAgentRoundResponseOutput(round: AgentRound, tasks: TaskRecord[]): ResponsesOutputItem[] | null {
-  if (round.responseOutput?.length) return round.responseOutput
-
-  for (const taskId of round.outputTaskIds) {
-    const task = tasks.find((item) => item.id === taskId)
-    const output = parseResponseOutputFromPayload(task?.rawResponsePayload)
-    if (output?.length) return output
-  }
-
-  return null
-}
-
-async function buildAgentApiInput(conversation: AgentConversation, currentRound: AgentRound, tasks: TaskRecord[]): Promise<unknown[]> {
-  const input: unknown[] = []
-  const rounds = getAgentRoundPath(conversation, currentRound.id)
-
-  for (const round of rounds) {
-    const userMessage = conversation.messages.find((message) => message.id === round.userMessageId)
-    if (!userMessage) continue
-
-    input.push(await createAgentUserInputItem(conversation, round, userMessage, tasks))
-    if (round.id === currentRound.id) continue
-
-    const output = getAgentRoundResponseOutput(round, tasks)
-    if (output?.length) {
-      const sanitizedOutput = sanitizeResponseOutputForInput(filterAgentRoundResponseOutputForInput(round, tasks, output))
-      if (sanitizedOutput.length > 0) {
-        input.push(...sanitizedOutput)
-      } else {
-        // All output items were filtered (e.g. only image_generation_call); add fallback
-        const assistantMessage = round.assistantMessageId
-          ? conversation.messages.find((message) => message.id === round.assistantMessageId)
-          : null
-        input.push(createAgentAssistantFallbackItem(
-          assistantMessage?.content || '图像已生成。',
-        ))
-      }
-    } else {
-      const assistantMessage = round.assistantMessageId
-        ? conversation.messages.find((message) => message.id === round.assistantMessageId)
-        : null
-      input.push(createAgentAssistantFallbackItem(
-        assistantMessage?.content || '[No text response]',
-      ))
-    }
-
-    // Inject generated images as a separate user message with input_image parts
-    if (round.outputTaskIds.length > 0) {
-      const imagesItem = await createAgentGeneratedImagesInputItem(round, tasks)
-      if (imagesItem) input.push(imagesItem)
-    }
-  }
-
-  return input
-}
-
-function getAgentFunctionOutputCallIds(output: ResponsesOutputItem[]) {
-  return new Set(output
-    .filter((item) => item.type === 'function_call_output' && item.call_id)
-    .map((item) => item.call_id!))
-}
-
-function createAgentRecoveredToolOutputs(round: AgentRound, tasks: TaskRecord[]) {
-  const output = round.responseOutput ?? []
-  if (output.length === 0) return null
-
-  const existingOutputCallIds = getAgentFunctionOutputCallIds(output)
-  const additions: ResponsesOutputItem[] = []
-  const recoveredTaskIds: string[] = []
-  let hasPendingRecoverableCall = false
-  let allSuccessful = true
-
-  for (const item of output) {
-    if (item.type !== 'function_call' || !item.call_id || existingOutputCallIds.has(item.call_id)) continue
-
-    if (item.name === 'generate_image') {
-      const imageId = (() => {
-        try {
-          const value = JSON.parse(item.arguments ?? '{}') as Record<string, unknown>
-          return typeof value.id === 'string' && value.id.trim() ? value.id.trim() : 'image'
-        } catch {
-          return 'image'
-        }
-      })()
-      const task = tasks.find((task) => task.agentRoundId === round.id && task.agentToolCallId === item.call_id)
-      if (!task || task.status === 'running' || task.falRecoverable || task.customRecoverable) {
-        hasPendingRecoverableCall = true
-        continue
-      }
-
-      recoveredTaskIds.push(task.id)
-      const ok = task.status === 'done' && task.outputImages.length > 0
-      if (!ok) allSuccessful = false
-      additions.push({
-        type: 'function_call_output',
-        call_id: item.call_id,
-        output: JSON.stringify({
-          id: imageId,
-          status: ok ? 'done' : 'error',
-          ...(ok ? {} : { error: task.error || '图像生成失败' }),
-        }),
-      })
-      continue
-    }
-
-    if (item.name === 'generate_image_batch') {
-      const batchItems = parseBatchImageCallArguments(item.arguments ?? '')
-      if (!batchItems?.length) continue
-
-      const batchTasks = round.outputTaskIds
-        .map((taskId) => tasks.find((task) => task.id === taskId))
-        .filter((task): task is TaskRecord => Boolean(task && task.agentBatchCallId === item.call_id))
-      if (batchTasks.length < batchItems.length || batchTasks.some((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)) {
-        hasPendingRecoverableCall = true
-        continue
-      }
-
-      recoveredTaskIds.push(...batchTasks.map((task) => task.id))
-      const images = batchItems.map((batchItem, index) => {
-        const task = batchTasks[index]
-        const ok = task?.status === 'done' && task.outputImages.length > 0
-        if (!ok) allSuccessful = false
-        return {
-          id: batchItem.id,
-          status: ok ? 'done' : 'error',
-          ...(ok ? {} : { error: task?.error || '图像生成失败' }),
-        }
-      })
-      additions.push({
-        type: 'function_call_output',
-        call_id: item.call_id,
-        output: JSON.stringify({ images }),
-      })
-    }
-  }
-
-  if (hasPendingRecoverableCall || additions.length === 0) return null
-  return { additions, recoveredTaskIds, allSuccessful }
-}
-
-function createReadyAgentRecoveredToolState(round: AgentRound, tasks: TaskRecord[]) {
-  const recovered = createAgentRecoveredToolOutputs(round, tasks)
-  if (recovered) return recovered
-  if (!round.responseOutput?.length || round.outputTaskIds.length === 0) return null
-
-  const outputCallIds = getAgentFunctionOutputCallIds(round.responseOutput)
-  const pendingFunctionCall = round.responseOutput.some((item) =>
-    item.type === 'function_call' &&
-    (item.name === 'generate_image' || item.name === 'generate_image_batch') &&
-    item.call_id &&
-    !outputCallIds.has(item.call_id),
-  )
-  if (pendingFunctionCall) return null
-
-  const roundTasks = round.outputTaskIds
-    .map((taskId) => tasks.find((task) => task.id === taskId))
-    .filter((task): task is TaskRecord => Boolean(task))
-  if (roundTasks.length === 0 || roundTasks.some((task) => task.status === 'running' || task.falRecoverable || task.customRecoverable)) return null
-
-  return {
-    additions: [] as ResponsesOutputItem[],
-    recoveredTaskIds: roundTasks.map((task) => task.id),
-    allSuccessful: roundTasks.every((task) => task.status === 'done' && task.outputImages.length > 0),
+    await commitTaskDeletion(deletedTaskIds, tasks, conversations)
+  } catch (err) {
+    console.warn('原子清理任务关联数据失败，改用逐项持久化', err)
+    await Promise.all([
+      ...deletedTaskIds.map((taskId) => dbDeleteTask(taskId)),
+      ...tasks.map((task) => dbPutTask(task)),
+      ...conversations.map((conversation) => dbPutAgentConversation(conversation)),
+    ])
   }
 }
 
@@ -3408,33 +2499,6 @@ function appendAgentRecoveredToolOutputs(conversationId: string, roundId: string
         : round
     }),
   }))
-}
-
-function getAgentRecoveredToolCallCount(output: ResponsesOutputItem[], tasks: TaskRecord[]) {
-  const functionOutputs = output.filter((item) => item.type === 'function_call_output')
-  const functionCallCount = functionOutputs.reduce((count, item) => {
-    if (!item.output) return count
-    try {
-      const payload = JSON.parse(item.output) as { images?: unknown[]; status?: string }
-      if (Array.isArray(payload.images)) return count + payload.images.filter((image) => isRecord(image) && image.status === 'done').length
-      return payload.status === 'done' ? count + 1 : count
-    } catch {
-      return count
-    }
-  }, 0)
-  const builtInCount = countResponseToolCalls(output)
-  const doneTaskCount = tasks.filter((task) => task.status === 'done').length
-  return Math.max(functionCallCount + builtInCount, doneTaskCount)
-}
-
-function getAgentRecoveredFailureError(round: AgentRound, tasks: TaskRecord[]) {
-  const failedTasks = round.outputTaskIds
-    .map((taskId) => tasks.find((item) => item.id === taskId))
-    .filter((task): task is TaskRecord => Boolean(task && task.status === 'error' && !task.falRecoverable && !task.customRecoverable))
-
-  if (failedTasks.length === 0) return '图像生成失败'
-  if (failedTasks.length === 1) return failedTasks[0].error || '图像生成失败'
-  return '部分图像生成任务失败。'
 }
 
 async function continueRecoveredAgentRound(taskId: string) {
@@ -3462,6 +2526,7 @@ async function continueRecoveredAgentRound(taskId: string) {
             : currentRound,
         ),
       }))
+      if (!isConversationHiddenByPrivacyMode(conversation.id)) showTaskCompletionNotification('Agent 回复失败', '请回到应用查看详情。', 'task-failure')
     }
 
     const recovered = createReadyAgentRecoveredToolState(round, latestState.tasks)
@@ -3492,7 +2557,7 @@ async function continueRecoveredAgentRound(taskId: string) {
     }
     const roundTasks = updatedState.tasks.filter((item) => item.agentRoundId === round.id)
     const resumeParams = roundTasks.find((item) => item.params)?.params
-      ?? normalizeParamsForSettings(updatedState.params, createSettingsForApiProfile(normalizedSettings, activeProfile), { hasInputImages: round.inputImageIds.length > 0 })
+      ?? normalizeParamsForSettings(updatedState.params, createSettingsForApiProfile(normalizedSettings, imageProfile), { hasInputImages: round.inputImageIds.length > 0 })
     const maxToolCalls = Number.isFinite(normalizedSettings.agentMaxToolRounds)
       ? Math.max(1, Math.trunc(normalizedSettings.agentMaxToolRounds))
       : DEFAULT_AGENT_MAX_TOOL_ROUNDS
@@ -3529,6 +2594,10 @@ async function continueRecoveredAgentRound(taskId: string) {
 export async function submitAgentMessage() {
   const state = useStore.getState()
   const { settings, prompt, inputImages, maskDraft, params, showToast } = state
+  if (state.batchProgress) {
+    showToast('画廊批量任务进行中，请等待完成或回到画廊停止后再提交', 'error')
+    return
+  }
   const normalizedSettings = normalizeSettings(settings)
 
   const agentValidationError = getAgentProfileValidationError(normalizedSettings)
@@ -3580,6 +2649,7 @@ export async function submitAgentMessage() {
   }
 
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const imageRequestSettings = createSettingsForApiProfile(normalizedSettings, imageProfile)
   const now = Date.now()
   const editingRound = state.agentEditingRoundId
     ? conversation.rounds.find((item) => item.id === state.agentEditingRoundId) ?? null
@@ -3604,7 +2674,7 @@ export async function submitAgentMessage() {
   const parentRoundId = editingRound ? editingRound.parentRoundId ?? null : activeLeafId
   const parentPath = parentRoundId ? getAgentRoundPath(conversation, parentRoundId) : []
   const normalizedParams = {
-    ...normalizeParamsForSettings(params, requestSettings, { hasInputImages: inputImageIds.length > 0 }),
+    ...normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: inputImageIds.length > 0 }),
     n: DEFAULT_PARAMS.n,
     transparent_output: false,
   }
@@ -3637,7 +2707,7 @@ export async function submitAgentMessage() {
 
   let fallbackTitle: string | null = null
   updateAgentConversation(conversation.id, (current) => {
-    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(trimmedPrompt, current.title) : current.title
+    const nextTitle = current.rounds.length === 0 ? createAgentConversationTitle(stripImageMentionMarkers(trimmedPrompt), current.title) : current.title
     if (current.rounds.length === 0) fallbackTitle = nextTitle
     const messages = shouldAppendToEditingRound
       ? current.messages.some((message) => message.id === userMessageId)
@@ -3669,7 +2739,7 @@ export async function submitAgentMessage() {
   state.setAgentEditingRoundId(null)
 
   if (fallbackTitle) {
-    void generateAgentConversationTitle(conversation.id, trimmedPrompt, inputImageIds, requestSettings, activeProfile, fallbackTitle)
+    void generateAgentConversationTitle(conversation.id, stripImageMentionMarkers(trimmedPrompt), inputImageIds, requestSettings, activeProfile, fallbackTitle)
   }
 
   void executeAgentRound(conversation.id, roundId, normalizedParams, requestSettings, activeProfile, imageProfile)
@@ -3707,8 +2777,9 @@ export async function regenerateAgentAssistantMessage(conversationId: string, ro
 
   const inputImageIds = uniqueIds(sourceRound.inputImageIds)
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const imageRequestSettings = createSettingsForApiProfile(normalizedSettings, imageProfile)
   const normalizedParams = {
-    ...normalizeParamsForSettings(params, requestSettings, { hasInputImages: inputImageIds.length > 0 }),
+    ...normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: inputImageIds.length > 0 }),
     n: DEFAULT_PARAMS.n,
     transparent_output: false,
   }
@@ -3806,7 +2877,12 @@ async function executeAgentRound(
     const maskDataUrl = round.maskImageId ? await ensureImageCached(round.maskImageId) : undefined
     if (round.maskImageId && !maskDataUrl) throw new Error('遮罩图片已不存在')
 
-    const apiInput = await buildAgentApiInput(conversation, round, latestState.tasks)
+    const apiInput = await buildAgentApiInput({
+      conversation,
+      currentRound: round,
+      tasks: latestState.tasks,
+      loadImage: ensureImageCached,
+    })
     if (controller.signal.aborted) throw createAgentAbortError()
     const existingAssistantMessage = round.assistantMessageId
       ? conversation.messages.find((message) => message.id === round.assistantMessageId) ?? null
@@ -3815,8 +2891,24 @@ async function executeAgentRound(
     const resumedAssistantContent = resume ? existingAssistantMessage?.content.trim() ?? '' : ''
     const shouldStreamAssistantMessage = activeProfile.streamImages === true
     const imageRequestSettings = createSettingsForApiProfile(requestSettings, imageProfile)
+    const imageParams = normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: round.inputImageIds.length > 0 })
     const streamingTaskIds: string[] = resume ? [...round.outputTaskIds] : []
     const taskIdByToolCallId = new Map<string, string>()
+    const taskByToolCallId = new Map<string, TaskRecord>()
+
+    const getDeletedAgentTasks = () => {
+      const deletedTasks = getDeletedActiveAgentTasks(conversationId, roundId, controller)
+      const deletedTaskIds = new Set(deletedTasks.map((task) => task.id))
+      const currentTaskIds = new Set(useStore.getState().tasks.map((task) => task.id))
+      for (const [toolCallId, taskId] of taskIdByToolCallId) {
+        const task = taskByToolCallId.get(toolCallId)
+        if (task && !currentTaskIds.has(taskId) && !deletedTaskIds.has(taskId)) deletedTasks.push(task)
+      }
+      return deletedTasks
+    }
+    const getLatestRound = () => useStore.getState().agentConversations
+      .find((item) => item.id === conversationId)
+      ?.rounds.find((item) => item.id === roundId)
 
     const attachTaskToAgentRound = (taskId: string) => {
       if (streamingTaskIds.includes(taskId)) return
@@ -3841,7 +2933,7 @@ async function executeAgentRound(
       toolCallId: string,
       taskPrompt = '',
       inputImageIds = round.inputImageIds ?? [],
-      options: { createdAt?: number; agentBatchCallId?: string; maskTargetImageId?: string | null; maskImageId?: string | null; taskParams?: TaskParams } = {},
+      options: { createdAt?: number; agentBatchCallId?: string; agentBatchItemId?: string; maskTargetImageId?: string | null; maskImageId?: string | null; taskParams?: TaskParams } = {},
     ) => {
       const existingTaskId = taskIdByToolCallId.get(toolCallId)
       if (existingTaskId) return existingTaskId
@@ -3849,6 +2941,7 @@ async function executeAgentRound(
       const existingTask = useStore.getState().tasks.find((task) => task.agentToolCallId === toolCallId)
       if (existingTask) {
         taskIdByToolCallId.set(toolCallId, existingTask.id)
+        taskByToolCallId.set(toolCallId, existingTask)
         attachTaskToAgentRound(existingTask.id)
         return existingTask.id
       }
@@ -3856,7 +2949,7 @@ async function executeAgentRound(
       const task: TaskRecord = {
         id: genId(),
         prompt: taskPrompt,
-        params: options.taskParams ?? { ...params, n: 1 },
+        params: options.taskParams ?? { ...imageParams, n: 1 },
         apiProvider: imageProfile.provider,
         apiProfileId: imageProfile.id,
         apiProfileName: imageProfile.name,
@@ -3877,9 +2970,11 @@ async function executeAgentRound(
         agentMessageId: assistantMessageId,
         agentToolCallId: toolCallId,
         ...(options.agentBatchCallId ? { agentBatchCallId: options.agentBatchCallId } : {}),
+        ...(options.agentBatchItemId ? { agentBatchItemId: options.agentBatchItemId } : {}),
       }
 
       taskIdByToolCallId.set(toolCallId, task.id)
+      taskByToolCallId.set(toolCallId, task)
       useStore.getState().setTasks([task, ...useStore.getState().tasks])
       attachTaskToAgentRound(task.id)
       await putTask(task)
@@ -3890,30 +2985,28 @@ async function executeAgentRound(
       const toolCallId = image.toolCallId ?? genId()
       const taskId = await ensureStreamingAgentTask(toolCallId)
       const latestTask = useStore.getState().tasks.find((task) => task.id === taskId)
-      if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return taskId
+      if (latestTask?.status === 'done' && latestTask.outputImages.length > 0) return { taskId, committed: true }
 
       const stored = await storeImageWithSize(image.dataUrl, 'generated')
       cacheImage(stored.id, image.dataUrl)
-      const actualParams: Partial<TaskParams> = {
-        ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
-        ...(!hasActualSizeParam(image.actualParams) ? getImageSizeParam(stored) ?? {} : {}),
-        n: 1,
+      const latestBeforeUpdate = useStore.getState().tasks.find((task) => task.id === taskId)
+      if (!latestBeforeUpdate) {
+        await deleteUnreferencedImageIds([stored.id])
+        return { taskId, committed: false }
       }
+      const actualParams = deriveAgentImageActualParams(image.actualParams, stored)
       updateTaskInStore(taskId, {
-        prompt: image.revisedPrompt ?? latestTask?.prompt ?? '',
+        prompt: image.revisedPrompt ?? latestBeforeUpdate.prompt,
         outputImages: [stored.id],
         actualParams,
         actualParamsByImage: { [stored.id]: actualParams },
         revisedPromptByImage: image.revisedPrompt ? { [stored.id]: image.revisedPrompt } : undefined,
         rawResponsePayload,
-        status: 'done',
-        error: null,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - (latestTask?.createdAt ?? startedAt),
+        ...createTaskDonePatch(latestBeforeUpdate, Date.now()),
         agentToolAction: image.action,
       })
       useStore.getState().setTaskStreamPreview(taskId)
-      return taskId
+      return { taskId, committed: true }
     }
 
     const failAgentImageTask = (toolCallId: string, error: string, rawResponsePayload?: string) => {
@@ -3924,13 +3017,10 @@ async function executeAgentRound(
 
       useStore.getState().setTaskStreamPreview(taskId)
       updateTaskInStore(taskId, {
-        status: 'error',
-        error,
+        ...createTaskErrorPatch(latestTask, error, Date.now()),
         rawResponsePayload,
         falRecoverable: false,
         customRecoverable: false,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - latestTask.createdAt,
       })
     }
 
@@ -3943,11 +3033,8 @@ async function executeAgentRound(
       if (latestTask.apiProvider === 'fal' && latestTask.falRequestId && latestTask.falEndpoint) {
         useStore.getState().setTaskStreamPreview(taskId)
         updateTaskInStore(taskId, {
-          status: 'error',
-          error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
+          ...createTaskErrorPatch(latestTask, '与 fal.ai 的连接已断开，之后会继续查询任务结果。', Date.now()),
           falRecoverable: true,
-          finishedAt: Date.now(),
-          elapsed: Date.now() - latestTask.createdAt,
         })
         scheduleFalRecovery(taskId)
         return true
@@ -3956,11 +3043,8 @@ async function executeAgentRound(
       if (latestTask.customTaskId) {
         useStore.getState().setTaskStreamPreview(taskId)
         updateTaskInStore(taskId, {
-          status: 'error',
-          error: '与自定义异步任务的连接已断开，之后会继续查询任务结果。',
+          ...createTaskErrorPatch(latestTask, '与自定义异步任务的连接已断开，之后会继续查询任务结果。', Date.now()),
           customRecoverable: true,
-          finishedAt: Date.now(),
-          elapsed: Date.now() - latestTask.createdAt,
         })
         scheduleCustomRecovery(taskId)
         return true
@@ -4004,17 +3088,27 @@ async function executeAgentRound(
     let toolCallsUsed = resume?.toolCallsUsed ?? 0
     let apiInputForTurn = apiInput
     if (resume) {
-      apiInputForTurn = buildAgentContinuationInput(apiInput, round, useStore.getState().tasks, accumulatedOutputItems, toolCallsUsed, maxToolCalls)
-      const batchImagesItem = await createAgentBatchImagesInputItem(round, useStore.getState().tasks, resume.recoveredTaskIds)
-      if (batchImagesItem) apiInputForTurn.splice(apiInputForTurn.length - 1, 0, batchImagesItem)
+      const resumeState = useStore.getState()
+      apiInputForTurn = await buildAgentContinuationInput({
+        baseInput: apiInput,
+        currentRound: round,
+        tasks: resumeState.tasks,
+        currentRoundOutput: accumulatedOutputItems,
+        batchTaskIds: resume.recoveredTaskIds,
+        toolCallsUsed,
+        maxToolCalls,
+        loadImage: ensureImageCached,
+      })
     }
     let reachedToolLimit = resume ? toolCallsUsed >= maxToolCalls : false
     let pendingToolTextSeparator = false
 
     // Helper: resolve reference image ids to data URLs for batch image calls
-    const resolveReferenceImages = async (referenceIds: string[]): Promise<{ dataUrls: string[]; imageIds: string[] }> => {
+    const resolveReferenceImages = async (referenceIds: string[]): Promise<{ dataUrls: string[]; imageIds: string[]; sourceUrls: (string | null)[] }> => {
       const dataUrls: string[] = []
       const imageIds: string[] = []
+      const sourceUrls: (string | null)[] = []
+      const imageSourceUrls = useStore.getState().imageSourceUrls
       for (const refId of referenceIds) {
         // Resolve both generated image refs and current/user input refs from XML tags.
         const latestConv = useStore.getState().agentConversations.find((item) => item.id === conversationId)
@@ -4025,7 +3119,10 @@ async function executeAgentRound(
             if (currentRefId === refId) {
               const imageId = r.inputImageIds[imgIdx]
               const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) dataUrls.push(dataUrl)
+              if (dataUrl) {
+                dataUrls.push(dataUrl)
+                sourceUrls.push(imageSourceUrls[imageId] ?? null)
+              }
               imageIds.push(imageId)
             }
           }
@@ -4036,13 +3133,16 @@ async function executeAgentRound(
               const imageId = outputImages[imgIdx]
               if (!imageId) continue
               const dataUrl = await ensureImageCached(imageId)
-              if (dataUrl) dataUrls.push(dataUrl)
+              if (dataUrl) {
+                dataUrls.push(dataUrl)
+                sourceUrls.push(imageSourceUrls[imageId] ?? null)
+              }
               imageIds.push(imageId)
             }
           }
         }
       }
-      return { dataUrls, imageIds }
+      return { dataUrls, imageIds, sourceUrls }
     }
 
     const parseSingleImageCallArguments = (args: string): { id: string; prompt: string } | null => {
@@ -4061,6 +3161,7 @@ async function executeAgentRound(
       taskId: string
       prompt: string
       referenceImageDataUrls: string[]
+      referenceImageSourceUrls?: (string | null)[]
       taskParams: TaskParams
       signal: AbortSignal
       onPartialImage?: (event: { image: string; partialImageIndex?: number }) => void | Promise<void>
@@ -4070,6 +3171,8 @@ async function executeAgentRound(
         prompt: replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
+        inputImageUrls: opts.referenceImageSourceUrls,
+        skipCodexCliSizePrompt: true,
         onPartialImage: opts.onPartialImage
           ? (partial) => {
               void opts.onPartialImage?.({ image: partial.image, partialImageIndex: partial.partialImageIndex ?? partial.requestIndex })
@@ -4109,7 +3212,7 @@ async function executeAgentRound(
       }
     }
 
-    const executeSingleImageFunctionCall = async (functionCallItem: ResponsesOutputItem): Promise<string> => {
+    const executeSingleImageFunctionCall = async (functionCallItem: ResponsesOutputItem): Promise<string | null> => {
       const callId = functionCallItem.call_id ?? ''
       const item = parseSingleImageCallArguments(functionCallItem.arguments ?? '')
       if (!item) return JSON.stringify({ error: 'Invalid or empty image arguments' })
@@ -4118,7 +3221,7 @@ async function executeAgentRound(
       const references = await resolveReferenceImages(referenceIds)
       const toolCallId = callId || genId()
       const taskParams = {
-        ...normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: references.dataUrls.length > 0 }),
+        ...normalizeParamsForSettings(imageParams, imageRequestSettings, { hasInputImages: references.dataUrls.length > 0 }),
         n: 1,
       }
 
@@ -4134,6 +3237,7 @@ async function executeAgentRound(
           taskId,
           prompt: item.prompt,
           referenceImageDataUrls: references.dataUrls,
+          referenceImageSourceUrls: references.sourceUrls,
           taskParams,
           signal: controller.signal,
           onPartialImage: async ({ image, partialImageIndex }) => {
@@ -4148,9 +3252,12 @@ async function executeAgentRound(
 
         if (controller.signal.aborted) throw createAgentAbortError()
         if (result.image) {
-          await completeAgentImageTask({ ...result.image, toolCallId }, result.rawResponsePayload)
-          toolCallsUsed += 1
-          return JSON.stringify({ id: item.id, status: 'done' })
+          const completed = await completeAgentImageTask({ ...result.image, toolCallId }, result.rawResponsePayload)
+          if (completed.committed) {
+            toolCallsUsed += 1
+            return JSON.stringify({ id: item.id, status: 'done' })
+          }
+          return null
         }
 
         failAgentImageTask(toolCallId, result.error!, result.rawResponsePayload)
@@ -4182,23 +3289,24 @@ async function executeAgentRound(
         const batchToolCallId = genId()
         const taskParams = requestSettings.agentApiConfigMode === 'hybrid'
           ? {
-              ...normalizeParamsForSettings(params, imageRequestSettings, { hasInputImages: references.dataUrls.length > 0 }),
+              ...normalizeParamsForSettings(imageParams, imageRequestSettings, { hasInputImages: references.dataUrls.length > 0 }),
               n: 1,
             }
-          : { ...params, n: 1 }
+          : { ...imageParams, n: 1 }
         await ensureStreamingAgentTask(batchToolCallId, item.prompt, references.imageIds, {
           createdAt: Date.now(),
           taskParams,
           maskTargetImageId: null,
           maskImageId: null,
           ...(callId ? { agentBatchCallId: callId } : {}),
+          agentBatchItemId: item.id,
         })
         batchExecutionItems.push({ item, batchToolCallId, references, referenceIds, taskParams })
       }
 
       // Fire all batch items concurrently after all cards are visible.
       const batchPromises = batchExecutionItems.map(async ({ item, batchToolCallId, references, referenceIds, taskParams }) => {
-
+        let committed = false
         const batchResult = requestSettings.agentApiConfigMode === 'hybrid'
           ? {
               batchItemId: item.id,
@@ -4206,6 +3314,7 @@ async function executeAgentRound(
                 taskId: taskIdByToolCallId.get(batchToolCallId)!,
                 prompt: item.prompt,
                 referenceImageDataUrls: references.dataUrls,
+                referenceImageSourceUrls: references.sourceUrls,
                 taskParams,
                 signal: controller.signal,
                 onPartialImage: async ({ image, partialImageIndex }) => {
@@ -4247,18 +3356,19 @@ async function executeAgentRound(
               onImageToolCompleted: shouldStreamAssistantMessage
                 ? async (image) => {
                     if (controller.signal.aborted) return
-                    await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })
+                    committed = (await completeAgentImageTask({ ...image, toolCallId: batchToolCallId })).committed
                   }
                 : undefined,
             })
 
         if (controller.signal.aborted) throw createAgentAbortError()
         // If not streaming and we have an image, complete the pre-created task.
-        if (batchResult.image && !shouldStreamAssistantMessage) {
-          await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)
+        if (batchResult.image && (requestSettings.agentApiConfigMode === 'hybrid' || !shouldStreamAssistantMessage)) {
+          committed = (await completeAgentImageTask({ ...batchResult.image, toolCallId: batchToolCallId }, batchResult.rawResponsePayload)).committed
         }
 
-        return batchResult
+        const latestTask = useStore.getState().tasks.find((task) => task.id === taskIdByToolCallId.get(batchToolCallId))
+        return { ...batchResult, committed: committed || Boolean(latestTask?.status === 'done' && latestTask.outputImages.length > 0) }
       })
 
       const batchResults = await Promise.allSettled(batchPromises)
@@ -4270,8 +3380,11 @@ async function executeAgentRound(
       for (let i = 0; i < batchItems.length; i++) {
         const settled = batchResults[i]
         const batchItem = batchItems[i]
+        const taskId = taskIdByToolCallId.get(batchExecutionItems[i].batchToolCallId)
+        if (!taskId || !useStore.getState().tasks.some((task) => task.id === taskId)) continue
         if (settled.status === 'fulfilled') {
           const r = settled.value
+          if (r.image && !r.committed) continue
           if (!r.image) {
             failAgentImageTask(batchExecutionItems[i].batchToolCallId, r.error!, r.rawResponsePayload)
           }
@@ -4310,7 +3423,8 @@ async function executeAgentRound(
       const result = await callAgentResponsesApi({
         settings: requestSettings,
         profile: activeProfile,
-        params,
+        imageProfile,
+        params: imageParams,
         input: apiInputForTurn,
         maskDataUrl,
         signal: controller.signal,
@@ -4329,10 +3443,10 @@ async function executeAgentRound(
         onOutputItems: shouldStreamAssistantMessage
           ? (outputItems) => {
               if (controller.signal.aborted) return
-              currentResponseOutputItems = outputItems
+              currentResponseOutputItems = canonicalizeBatchFunctionCallArguments(outputItems)
               updateAgentConversation(conversationId, (current) => ({
                 ...current,
-                rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseOutput: mergeResponseOutputItems(accumulatedOutputItems, outputItems) } : item),
+                rounds: current.rounds.map((item) => item.id === roundId ? { ...item, responseOutput: mergeResponseOutputItems(accumulatedOutputItems, currentResponseOutputItems) } : item),
               }))
             }
           : undefined,
@@ -4371,7 +3485,19 @@ async function executeAgentRound(
       if (controller.signal.aborted) throw createAgentAbortError()
 
       lastResponseId = result.responseId ?? lastResponseId
-      currentResponseOutputItems = currentResponseOutputItems.length ? currentResponseOutputItems : result.outputItems ?? []
+      currentResponseOutputItems = canonicalizeBatchFunctionCallArguments(
+        currentResponseOutputItems.length ? currentResponseOutputItems : result.outputItems ?? [],
+      )
+      const deletedTasks = getDeletedAgentTasks()
+      const currentRound = getLatestRound()
+      if (currentRound) {
+        currentResponseOutputItems = scrubResponseOutputForDeletedAgentTasks(
+          currentRound,
+          currentResponseOutputItems,
+          deletedTasks,
+          [...useStore.getState().tasks, ...deletedTasks],
+        )
+      }
       accumulatedOutputItems = mergeResponseOutputItems(accumulatedOutputItems, currentResponseOutputItems)
       updateAgentConversation(conversationId, (current) => ({
         ...current,
@@ -4391,7 +3517,9 @@ async function executeAgentRound(
       // Process built-in image_generation_call results (single images)
       for (const image of result.images) {
         if (image.toolCallId && taskIdByToolCallId.has(image.toolCallId)) {
-          const completedTaskId = await completeAgentImageTask(image, result.rawResponsePayload)
+          const completed = await completeAgentImageTask(image, result.rawResponsePayload)
+          if (!completed.committed) continue
+          const completedTaskId = completed.taskId
           const promptRefIds = uniqueIds(extractAgentReferenceIds(image.revisedPrompt ?? ''))
           if (promptRefIds.length > 0) {
             const promptRefs = await resolveReferenceImages(promptRefIds)
@@ -4411,15 +3539,11 @@ async function executeAgentRound(
         const promptRefs = await resolveReferenceImages(promptRefIds)
         const stored = await storeImageWithSize(image.dataUrl, 'generated')
         cacheImage(stored.id, image.dataUrl)
-        const actualParams: Partial<TaskParams> = {
-          ...(Object.keys(image.actualParams ?? {}).length ? image.actualParams : {}),
-          ...(!hasActualSizeParam(image.actualParams) ? getImageSizeParam(stored) ?? {} : {}),
-          n: 1,
-        }
+        const actualParams = deriveAgentImageActualParams(image.actualParams, stored)
         const task: TaskRecord = {
           id: genId(),
           prompt: image.revisedPrompt ?? round?.prompt ?? userMessage.content,
-          params,
+          params: imageParams,
           apiProvider: imageProfile.provider,
           apiProfileId: imageProfile.id,
           apiProfileName: imageProfile.name,
@@ -4478,6 +3602,7 @@ async function executeAgentRound(
       if (imageFunctionCalls.length > 0) {
         for (const fc of imageFunctionCalls) {
           const output = await executeSingleImageFunctionCall(fc)
+          if (output == null) continue
           functionCallOutputs.push({
             type: 'function_call_output',
             call_id: fc.call_id,
@@ -4505,8 +3630,27 @@ async function executeAgentRound(
         })
       }
 
+      const latestDeletedTasks = getDeletedAgentTasks()
+      const cleanedConversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
+      const latestRoundForCleanup = cleanedConversation?.rounds.find((item) => item.id === roundId)
+      const outputBeforeFunctionResults = latestRoundForCleanup?.responseOutput ?? accumulatedOutputItems
+      const mergedOutputItems = mergeResponseOutputItems(outputBeforeFunctionResults, functionCallOutputs)
+      const accumulatedOutputItemsWithFunctionOutputs = latestRoundForCleanup
+        ? scrubResponseOutputForDeletedAgentTasks(
+            latestRoundForCleanup,
+            mergedOutputItems,
+            latestDeletedTasks,
+            [...useStore.getState().tasks, ...latestDeletedTasks],
+          )
+        : mergedOutputItems
+      const generatedOutputCallIds = new Set(functionCallOutputs.map((item) => item.call_id).filter(Boolean))
+      const effectiveFunctionCallOutputs = accumulatedOutputItemsWithFunctionOutputs.filter(
+        (item) => item.type === 'function_call_output' && item.call_id && generatedOutputCallIds.has(item.call_id),
+      )
+
       // If no function calls need output → model decided the task is done → break
-      if (functionCallOutputs.length === 0) {
+      if (effectiveFunctionCallOutputs.length === 0) {
+        accumulatedOutputItems = accumulatedOutputItemsWithFunctionOutputs
         updateAgentConversation(conversationId, (current) => ({
           ...current,
           updatedAt: Date.now(),
@@ -4514,8 +3658,6 @@ async function executeAgentRound(
         }))
         break
       }
-
-      const accumulatedOutputItemsWithFunctionOutputs = mergeResponseOutputItems(accumulatedOutputItems, functionCallOutputs)
 
       updateAgentConversation(conversationId, (current) => ({
         ...current,
@@ -4529,24 +3671,22 @@ async function executeAgentRound(
       }
 
       // Build continuation input with function call outputs and available refs
-      const latestConversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
+      const continuationState = useStore.getState()
+      const latestConversation = continuationState.agentConversations.find((item) => item.id === conversationId)
       const latestRound = latestConversation?.rounds.find((item) => item.id === roundId)
       if (!latestRound) break
 
-      const continuationBase = buildAgentContinuationInput(
-        apiInput,
-        latestRound,
-        useStore.getState().tasks,
-        accumulatedOutputItems,
+      apiInputForTurn = await buildAgentContinuationInput({
+        baseInput: apiInput,
+        currentRound: latestRound,
+        tasks: continuationState.tasks,
+        currentRoundOutput: accumulatedOutputItemsWithFunctionOutputs,
+        functionCallOutputs: effectiveFunctionCallOutputs,
+        batchTaskIds: streamingTaskIds,
         toolCallsUsed,
         maxToolCalls,
-      )
-      // Insert function_call_output items before the continuation system message
-      continuationBase.splice(continuationBase.length - 1, 0, ...functionCallOutputs)
-      // Inject batch-generated images as input_image user message for model visibility
-      const batchImagesItem = await createAgentBatchImagesInputItem(latestRound, useStore.getState().tasks, streamingTaskIds)
-      if (batchImagesItem) continuationBase.splice(continuationBase.length - 1, 0, batchImagesItem)
-      apiInputForTurn = continuationBase
+        loadImage: ensureImageCached,
+      })
       accumulatedOutputItems = accumulatedOutputItemsWithFunctionOutputs
       pendingToolTextSeparator = true
     }
@@ -4559,8 +3699,16 @@ async function executeAgentRound(
       (task) => Boolean(task.agentToolCallId && !task.agentBatchCallId),
     )
 
-    const taskIds: string[] = [...streamingTaskIds]
-    const outputIds = taskIds.flatMap((taskId) => useStore.getState().tasks.find((task) => task.id === taskId)?.outputImages ?? [])
+    const latestTasks = useStore.getState().tasks
+    const existingTaskIds = new Set(latestTasks.map((task) => task.id))
+    const taskIds = streamingTaskIds.filter((taskId) => existingTaskIds.has(taskId))
+    const outputIds = taskIds.flatMap((taskId) => latestTasks.find((task) => task.id === taskId)?.outputImages ?? [])
+    const latestConversation = useStore.getState().agentConversations.find((item) => item.id === conversationId)
+    const latestRound = latestConversation?.rounds.find((item) => item.id === roundId)
+    const deletedTasks = getDeletedAgentTasks()
+    const responseOutput = latestRound
+      ? scrubResponseOutputForDeletedAgentTasks(latestRound, accumulatedOutputItems, deletedTasks, [...latestTasks, ...deletedTasks])
+      : accumulatedOutputItems
     const limitNotice = reachedToolLimit ? `已达到最大工具调用次数（${maxToolCalls}），已停止自动续跑。` : ''
     const joinedText = textSegments.join('\n\n').trim()
     const finalContent = [joinedText, limitNotice]
@@ -4587,7 +3735,7 @@ async function executeAgentRound(
               assistantMessageId,
               outputTaskIds: taskIds,
               responseId: lastResponseId,
-              responseOutput: accumulatedOutputItems,
+              responseOutput,
               status: 'done',
               error: null,
               finishedAt: Date.now(),
@@ -4599,11 +3747,13 @@ async function executeAgentRound(
         : [...current.messages, assistantMessage],
     }))
 
-    useStore.getState().showToast(outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复', 'success')
-    showTaskCompletionNotification(
-      outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复',
-      outputIds.length > 0 ? `Agent 回复已结束，共生成 ${outputIds.length} 张图片。` : 'Agent 回复已结束。',
-    )
+    if (!isConversationHiddenByPrivacyMode(conversationId)) {
+      useStore.getState().showToast(outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复', 'success')
+      showTaskCompletionNotification(
+        outputIds.length > 0 ? 'Agent 已生成图片' : 'Agent 已回复',
+        outputIds.length > 0 ? `Agent 回复已结束，共生成 ${outputIds.length} 张图片。` : 'Agent 回复已结束。',
+      )
+    }
   } catch (err) {
     if (controller.signal.aborted) {
       if (markAgentRoundStopped(conversationId, roundId)) {
@@ -4659,10 +3809,26 @@ async function executeAgentRound(
             ],
       }
     })
-    useStore.getState().showToast(`Agent 请求失败：${message}`, 'error')
+    if (!isConversationHiddenByPrivacyMode(conversationId)) {
+      useStore.getState().showToast(`Agent 请求失败：${message}`, 'error')
+      showTaskCompletionNotification('Agent 回复失败', '请回到应用查看详情。', 'task-failure')
+    }
   } finally {
     if (agentRoundControllers.get(controllerKey) === controller) {
       agentRoundControllers.delete(controllerKey)
+    }
+    const deletedTasks = getDeletedActiveAgentTasks(conversationId, roundId, controller)
+    try {
+      const cleanup = scrubAgentOutputPayloadsForDeletedTasks(deletedTasks)
+      if (cleanup.updatedTasks.length > 0 || cleanup.updatedConversations.length > 0) {
+        await persistTaskDeletionCleanup([], cleanup)
+      }
+    } catch (err) {
+      console.warn('清理已删除 Agent 任务的响应失败', err)
+    } finally {
+      for (const task of deletedTasks) {
+        if (deletedActiveAgentTasks.get(task.id)?.controller === controller) deletedActiveAgentTasks.delete(task.id)
+      }
     }
   }
 }
@@ -4671,21 +3837,23 @@ async function executeTask(taskId: string) {
   const { settings } = useStore.getState()
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
+  const execution = Symbol(taskId)
+  taskExecutions.set(taskId, execution)
   const taskProfile = getTaskApiProfile(settings, task)
   if (!taskProfile && task.apiProfileId) {
+    const error = '找不到此任务所使用的 API 配置。'
     updateTaskInStore(taskId, {
-      status: 'error',
-      error: '找不到此任务所使用的 API 配置。',
+      ...createTaskErrorPatch(task, error, Date.now()),
       falRecoverable: false,
       customRecoverable: false,
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
     })
+    showTaskFailureNotification(task)
+    taskExecutions.delete(taskId)
     return
   }
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
-  const taskProvider = task.apiProvider ?? activeProfile.provider
+  const taskProvider = taskProfile?.provider ?? task.apiProvider ?? activeProfile.provider
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
         ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
     : null
@@ -4696,7 +3864,7 @@ async function executeTask(taskId: string) {
   if (
     taskProvider !== 'fal' &&
     !isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0) &&
-    !usesConcurrentOpenAIImageRequests(activeProfile, task.params)
+    !usesConcurrentImageRequests(requestSettings, activeProfile, task.params, task.inputImageIds.length > 0)
   ) {
     scheduleOpenAIWatchdog(taskId, activeProfile.timeout, activeProfile)
   }
@@ -4723,9 +3891,13 @@ async function executeTask(taskId: string) {
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
       params: task.params,
+      nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
       inputImageDataUrls: inputDataUrls,
+      inputImageUrls: task.inputImageIds.map((id) => useStore.getState().imageSourceUrls[id] ?? null),
       maskDataUrl,
+      skipCodexCliSizePrompt: task.sourceMode === 'agent',
       onFalRequestEnqueued: (request) => {
+        if (taskExecutions.get(taskId) !== execution) return
         falRequestInfo = request
         updateTaskInStore(taskId, {
           falRequestId: request.requestId,
@@ -4734,6 +3906,7 @@ async function executeTask(taskId: string) {
         })
       },
       onCustomTaskEnqueued: (request) => {
+        if (taskExecutions.get(taskId) !== execution) return
         customTaskInfo = request
         updateTaskInStore(taskId, {
           customTaskId: request.taskId,
@@ -4748,12 +3921,14 @@ async function executeTask(taskId: string) {
         })
       },
       onPartialImage: (partial) => {
+        if (taskExecutions.get(taskId) !== execution) return
         useStore.getState().setTaskStreamPreview(taskId, partial.image, partial.requestIndex)
-        void persistTaskStreamPartialImage(taskId, partial.image)
+        void persistTaskStreamPartialImage(taskId, partial.image, execution)
       },
     })
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
+    if (taskExecutions.get(taskId) !== execution) return
     if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') {
       useStore.getState().setTaskStreamPreview(taskId)
       return
@@ -4767,28 +3942,18 @@ async function executeTask(taskId: string) {
       isAsyncCustomTask ? undefined : result.actualParamsList,
       outputImageSizes,
     )
-    const actualParams = (() => {
-      if (taskProvider === 'fal') return firstActualParams(actualParamsList)
-      if (isAsyncCustomTask) return firstActualParams(actualParamsList)
-      const firstParams = firstActualParams(actualParamsList)
-      return {
-        ...result.actualParams,
-        size: result.actualParams?.size ?? firstParams?.size,
-        n: outputIds.length,
-      }
-    })()
+    const actualParams = deriveGalleryActualParams(taskProvider, isAsyncCustomTask, result.actualParams, actualParamsList, outputIds.length)
     const shouldStoreRevisedPrompts = taskProvider !== 'fal' && !isAsyncCustomTask
     const actualParamsByImage = mapActualParamsByImage(outputIds, actualParamsList)
-    const revisedPromptByImage = shouldStoreRevisedPrompts ? result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
-      const imgId = outputIds[index]
-      if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
-      return acc
-    }, {}) : undefined
-    const promptWasRevised = shouldStoreRevisedPrompts && result.revisedPrompts?.some(
+    const revisedPrompts = activeProfile.codexCli && task.sourceMode !== 'agent'
+      ? result.revisedPrompts?.map((prompt) => prompt == null ? prompt : stripInjectedCodexCliSizePrompt(prompt, requestPrompt, task.params.size))
+      : result.revisedPrompts
+    const revisedPromptByImage = shouldStoreRevisedPrompts ? mapRevisedPromptsByImage(outputIds, revisedPrompts) : undefined
+    const promptWasRevised = shouldStoreRevisedPrompts && revisedPrompts?.some(
       (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== requestPrompt.trim(),
     )
-    const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
-    if (taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
+    const hasRevisedPromptValue = shouldStoreRevisedPrompts && revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
+    if (taskExecutions.get(taskId) === execution && taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
       if (promptWasRevised) {
         showCodexCliPrompt()
       } else if (!hasRevisedPromptValue) {
@@ -4798,8 +3963,9 @@ async function executeTask(taskId: string) {
 
     // 更新任务
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
-    if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') {
-      useStore.getState().setTaskStreamPreview(taskId)
+    if (taskExecutions.get(taskId) !== execution || !latestBeforeUpdate || latestBeforeUpdate.status !== 'running') {
+      if (taskExecutions.get(taskId) === execution) useStore.getState().setTaskStreamPreview(taskId)
+      await deleteUnreferencedImageIds([...outputIds, ...(transparentOriginalImageIds ?? [])])
       return
     }
     const partialImageIdsToClean = latestBeforeUpdate.streamPartialImageIds || []
@@ -4813,11 +3979,9 @@ async function executeTask(taskId: string) {
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
       actualParams,
       actualParamsByImage,
-      revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length > 0 ? revisedPromptByImage : undefined,
-      status: 'done',
-      customTaskStatus: isAsyncCustomTask ? 'completed' : latestBeforeUpdate.customTaskStatus,
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
+      revisedPromptByImage,
+      ...createTaskDonePatch(task, Date.now()),
+      customTaskStatus: isAsyncCustomTask ? 'completed' : latestBeforeSuccess.customTaskStatus,
       falRecoverable: false,
       customRecoverable: false,
     })
@@ -4827,8 +3991,11 @@ async function executeTask(taskId: string) {
     const completionMessage = failedCount > 0
       ? `生成完成：成功 ${outputIds.length} 张，失败 ${failedCount} 张`
       : `生成完成，共 ${outputIds.length} 张图片`
-    useStore.getState().showToast(completionMessage, failedCount > 0 ? 'error' : 'success')
-    if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `${completionMessage}。`)
+    // 批量任务只在整批结束时统一提示
+    if (!batchTaskIds.has(taskId) && !isTaskHiddenByPrivacyMode(task)) {
+      useStore.getState().showToast(completionMessage, failedCount > 0 ? 'error' : 'success')
+      if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `${completionMessage}。`)
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -4839,9 +4006,10 @@ async function executeTask(taskId: string) {
       useStore.getState().clearMaskDraft()
     }
   } catch (err) {
+    if (taskExecutions.get(taskId) !== execution) return
     clearOpenAIWatchdogTimer(taskId)
-    const latestTask = useStore.getState().tasks.find((t) => t.id === taskId) ?? task
-    if (latestTask.status !== 'running') return
+    const latestTask = useStore.getState().tasks.find((t) => t.id === taskId)
+    if (!latestTask || latestTask.status !== 'running') return
     useStore.getState().setTaskStreamPreview(taskId)
     const latestFalRequestInfo = falRequestInfo ?? (latestTask.falRequestId && latestTask.falEndpoint
       ? { requestId: latestTask.falRequestId, endpoint: latestTask.falEndpoint }
@@ -4849,23 +4017,17 @@ async function executeTask(taskId: string) {
     const latestCustomTaskInfo = customTaskInfo ?? (latestTask.customTaskId ? { taskId: latestTask.customTaskId } : null)
     if (latestTask.apiProvider === 'fal' && latestFalRequestInfo && isNetworkRecoverableError(err)) {
       updateTaskInStore(taskId, {
-        status: 'error',
-        error: '与 fal.ai 的连接已断开，之后会继续查询任务结果。',
+        ...createTaskErrorPatch(task, '与 fal.ai 的连接已断开，之后会继续查询任务结果。', Date.now()),
         falRequestId: latestFalRequestInfo.requestId,
         falEndpoint: latestFalRequestInfo.endpoint,
         falRecoverable: true,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
       })
       scheduleFalRecovery(taskId)
     } else if (latestCustomTaskInfo && isNetworkRecoverableError(err)) {
       updateTaskInStore(taskId, {
-        status: 'error',
-        error: '与自定义异步任务的连接已断开，之后会继续查询任务结果。',
+        ...createTaskErrorPatch(task, '与自定义异步任务的连接已断开，之后会继续查询任务结果。', Date.now()),
         customTaskId: latestCustomTaskInfo.taskId,
         customRecoverable: true,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
       })
       scheduleCustomRecovery(taskId)
     } else {
@@ -4880,42 +4042,27 @@ async function executeTask(taskId: string) {
         streamImages: activeProfile.streamImages,
         streamPartialImages: activeProfile.streamPartialImages,
       }
-      const networkErrorHint = getApiRequestNetworkErrorHint(err, latestTask.createdAt, usesApiProxy, hintProfile)
+      const networkErrorHint = getApiRequestNetworkErrorHint(err, latestTask.startedAt ?? latestTask.createdAt, usesApiProxy, hintProfile)
       if (networkErrorHint && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
         errorMessage += `\n${networkErrorHint}`
       }
       updateTaskInStore(taskId, {
-        status: 'error',
-        error: errorMessage,
+        ...createTaskErrorPatch(task, errorMessage, Date.now()),
         ...getRawErrorPayload(err),
         falRecoverable: false,
         customRecoverable: false,
-        finishedAt: Date.now(),
-        elapsed: Date.now() - task.createdAt,
       })
-      useStore.getState().setDetailTaskId(taskId)
+      // 批量任务不自动打开失败详情，避免连续弹窗打断
+      if (!batchTaskIds.has(taskId) && !isTaskHiddenByPrivacyMode(task)) useStore.getState().setDetailTaskId(taskId)
+      showTaskFailureNotification(task)
     }
   } finally {
+    if (taskExecutions.get(taskId) === execution) taskExecutions.delete(taskId)
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
-    for (const imgId of task.inputImageIds) {
-      imageCache.delete(imgId)
+    if (!taskExecutions.has(taskId)) {
+      for (const imgId of task.inputImageIds) deleteCachedImage(imgId)
     }
   }
-}
-
-function normalizeFavoritePatch(task: TaskRecord, patch: Partial<TaskRecord>, defaultFavoriteCollectionId: string | null): Partial<TaskRecord> {
-  if ('favoriteCollectionIds' in patch) {
-    const ids = normalizeFavoriteCollectionIds(patch.favoriteCollectionIds)
-    return { ...patch, favoriteCollectionIds: ids, isFavorite: ids.length > 0 }
-  }
-  if ('isFavorite' in patch) {
-    if (patch.isFavorite) {
-      const ids = normalizeFavoriteCollectionIds(task.favoriteCollectionIds)
-      return { ...patch, favoriteCollectionIds: ids.length ? ids : defaultFavoriteCollectionId ? [defaultFavoriteCollectionId] : [] }
-    }
-    return { ...patch, favoriteCollectionIds: [] }
-  }
-  return patch
 }
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
@@ -4927,55 +4074,6 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   setTasks(updated)
   maybeOpenSupportPrompt(tasks, updated, taskId)
   if (task) putTask(task)
-}
-
-function normalizeFavoriteCollectionIds(ids: unknown) {
-  if (!Array.isArray(ids)) return []
-  return Array.from(new Set(ids.map(String).filter((id) => id && id !== ALL_FAVORITES_COLLECTION_ID)))
-}
-
-function sameFavoriteCollectionIds(a: string[], b: string[]) {
-  if (a.length !== b.length) return false
-  const bSet = new Set(b)
-  return a.every((id) => bSet.has(id))
-}
-
-export function getTaskFavoriteCollectionIds(task: TaskRecord) {
-  const ids = normalizeFavoriteCollectionIds(task.favoriteCollectionIds)
-  if (ids.length > 0) return ids
-  const defaultFavoriteCollectionId = useStore.getState().defaultFavoriteCollectionId
-  return task.isFavorite && defaultFavoriteCollectionId ? [defaultFavoriteCollectionId] : []
-}
-
-function normalizeTaskFavoriteState(task: TaskRecord, collections: FavoriteCollection[]): TaskRecord {
-  const collectionIdSet = new Set(collections.map((collection) => collection.id))
-  const normalizedIds = normalizeFavoriteCollectionIds(task.favoriteCollectionIds).filter((id) => collectionIdSet.has(id))
-  // 旧版本只有 isFavorite 没有 favoriteCollectionIds，迁移到"默认"收藏夹
-  const defaultId = getDefaultNamedFavoriteCollectionId(collections)
-  const ids = normalizedIds.length > 0 ? normalizedIds : task.isFavorite && defaultId ? [defaultId] : []
-  const isFavorite = ids.length > 0 || Boolean(task.isFavorite)
-  if (ids.length === (task.favoriteCollectionIds ?? []).length && ids.every((id, index) => id === task.favoriteCollectionIds?.[index]) && Boolean(task.isFavorite) === isFavorite) {
-    return task
-  }
-  return { ...task, favoriteCollectionIds: ids, isFavorite }
-}
-
-function normalizeLoadedFavoriteState(tasks: TaskRecord[], collections: FavoriteCollection[], preferredDefaultFavoriteCollectionId: string | null) {
-  let changed = false
-  // 确保"默认"收藏夹存在，给孤立收藏任务一个归属
-  const normalizedCollections = ensureDefaultNamedCollection(ensureDefaultFavoriteCollection(normalizeFavoriteCollections(collections)))
-  const defaultFavoriteCollectionId = resolveDefaultFavoriteCollectionId(normalizedCollections, preferredDefaultFavoriteCollectionId)
-  const normalizedTasks = tasks.map((task) => {
-    const nextTask = normalizeTaskFavoriteState(task, normalizedCollections)
-    if (nextTask !== task) changed = true
-    return nextTask
-  })
-  return { tasks: normalizedTasks, collections: normalizedCollections, defaultFavoriteCollectionId, changed }
-}
-
-export function getFavoriteCollectionTitle(collectionId: string | null, collections = useStore.getState().favoriteCollections) {
-  if (collectionId === ALL_FAVORITES_COLLECTION_ID) return '全部'
-  return collections.find((collection) => collection.id === collectionId)?.name ?? DEFAULT_FAVORITE_COLLECTION_NAME
 }
 
 export function createFavoriteCollection(name: string) {
@@ -5013,12 +4111,12 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
   const ids = normalizeFavoriteCollectionIds(collectionIds)
   const uniqueTaskIds = Array.from(new Set(taskIds)).filter(Boolean)
   if (!uniqueTaskIds.length) return
-  const { tasks, setTasks, clearSelection, showToast } = useStore.getState()
+  const { tasks, setTasks, clearSelection, showToast, defaultFavoriteCollectionId } = useStore.getState()
   const idSet = new Set(uniqueTaskIds)
   const changedTaskIds = new Set<string>()
   const updated = tasks.map((task) => {
     if (!idSet.has(task.id)) return task
-    if (sameFavoriteCollectionIds(getTaskFavoriteCollectionIds(task), ids)) return task
+    if (sameFavoriteCollectionIds(getTaskFavoriteCollectionIds(task, defaultFavoriteCollectionId), ids)) return task
     changedTaskIds.add(task.id)
     return { ...task, favoriteCollectionIds: ids, isFavorite: ids.length > 0 }
   })
@@ -5033,98 +4131,121 @@ export async function updateTasksFavoriteCollections(taskIds: string[], collecti
 }
 
 export async function deleteFavoriteCollection(collectionId: string, deleteTasks = false) {
-  if (!collectionId || collectionId === ALL_FAVORITES_COLLECTION_ID) return
   const state = useStore.getState()
   const collection = state.favoriteCollections.find((item) => item.id === collectionId)
-  if (!collection || state.favoriteCollections.length <= 1) return
-  const collectionTaskRefs = state.tasks
-    .map((task) => ({ task, favoriteIds: getTaskFavoriteCollectionIds(task) }))
-    .filter(({ favoriteIds }) => favoriteIds.includes(collectionId))
-  const taskIds = collectionTaskRefs.map(({ task }) => task.id)
-  const nextCollections = state.favoriteCollections.filter((item) => item.id !== collectionId)
-  const nextCollectionIdSet = new Set(nextCollections.map((item) => item.id))
-  state.setFavoriteCollections(nextCollections)
-  if (state.defaultFavoriteCollectionId === collectionId) {
-    const nextDefaultId = nextCollections[0]?.id
-    if (nextDefaultId) useStore.getState().setDefaultFavoriteCollectionId(nextDefaultId)
-  }
-  if (state.activeFavoriteCollectionId === collectionId) state.setActiveFavoriteCollectionId(null)
-  if (deleteTasks) {
-    const idsByTaskToKeep = new Map<string, string[]>()
-    const taskIdsToDelete: string[] = []
-    for (const { task, favoriteIds } of collectionTaskRefs) {
-      const nextIds = favoriteIds.filter((id) => id !== collectionId && nextCollectionIdSet.has(id))
-      if (nextIds.length) {
-        idsByTaskToKeep.set(task.id, nextIds)
-      } else {
-        taskIdsToDelete.push(task.id)
-      }
-    }
-    if (idsByTaskToKeep.size) {
-      const latestTasks = useStore.getState().tasks
-      const updated = latestTasks.map((task) => {
-        const ids = idsByTaskToKeep.get(task.id)
-        return ids ? { ...task, favoriteCollectionIds: ids, isFavorite: true } : task
-      })
-      useStore.getState().setTasks(updated)
-      await Promise.all(updated.filter((task) => idsByTaskToKeep.has(task.id)).map((task) => putTask(task)))
-    }
-    if (taskIdsToDelete.length) await removeMultipleTasks(taskIdsToDelete)
-  } else if (taskIds.length) {
-    const idsByTaskId = new Map(collectionTaskRefs.map(({ task, favoriteIds }) => [
-      task.id,
-      favoriteIds.filter((id) => id !== collectionId && nextCollectionIdSet.has(id)),
-    ]))
-    const updated = state.tasks.map((task) => {
-      const ids = idsByTaskId.get(task.id)
-      if (!ids) return task
-      return { ...task, favoriteCollectionIds: ids, isFavorite: ids.length > 0 }
+  const result = deleteFavoriteCollectionState({
+    collections: state.favoriteCollections,
+    defaultFavoriteCollectionId: state.defaultFavoriteCollectionId,
+    activeFavoriteCollectionId: state.activeFavoriteCollectionId,
+    selectedFavoriteCollectionIds: state.selectedFavoriteCollectionIds,
+    selectedTaskIds: state.selectedTaskIds,
+    tasks: state.tasks,
+    collectionId,
+    deleteTasks,
+  })
+  if (!collection || !result) return
+
+  useStore.setState({
+    favoriteCollections: result.collections,
+    defaultFavoriteCollectionId: result.defaultFavoriteCollectionId,
+    activeFavoriteCollectionId: result.activeFavoriteCollectionId,
+    selectedFavoriteCollectionIds: result.selectedFavoriteCollectionIds,
+    selectedTaskIds: result.selectedTaskIds,
+  })
+  if (result.updatedTasks.length) {
+    const patches = new Map(result.updatedTasks.map((task) => [task.id, task]))
+    const updated = useStore.getState().tasks.map((task) => {
+      const patch = patches.get(task.id)
+      return patch ? { ...task, favoriteCollectionIds: patch.favoriteCollectionIds, isFavorite: patch.isFavorite } : task
     })
-    state.setTasks(updated)
-    await Promise.all(updated.filter((task) => idsByTaskId.has(task.id)).map((task) => putTask(task)))
+    useStore.getState().setTasks(updated)
+    await Promise.all(updated.filter((task) => patches.has(task.id)).map((task) => putTask(task)))
   }
-  useStore.getState().setSelectedFavoriteCollectionIds((ids) => ids.filter((id) => id !== collectionId))
+  if (result.taskIdsToDelete.length) await removeMultipleTasks(result.taskIdsToDelete)
   useStore.getState().showToast(`已删除收藏夹「${collection.name}」`, 'success')
 }
 
-/** 重试失败的任务：创建新任务并执行 */
+/** 按重试方式新建任务或覆盖原任务；Agent 对话中的任务始终新建 */
 export async function retryTask(task: TaskRecord) {
-  const { settings } = useStore.getState()
+  const state = useStore.getState()
+  const { settings, tasks } = state
+  const source = tasks.find((item) => item.id === task.id)
+  if (!source || source.status === 'running' || source.falRecoverable || source.customRecoverable) return
   const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
-  const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+  const normalizedParams = normalizeParamsForSettings(source.params, settings, { hasInputImages: source.inputImageIds.length > 0 })
+  const shouldUseTransparentOutput = (normalizedParams.output_format === 'png' || normalizedParams.output_format === 'webp') && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
     ? getTransparentRequestParams(normalizedParams)
     : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output
-    ? createTransparentOutputMeta(task.prompt.trim())
+  const transparentMeta = taskParams.transparent_output && activeProfile.transparentBackgroundMethod === 'local'
+    ? createTransparentOutputMeta(source.prompt.trim())
     : null
-  const taskId = genId()
+  const overwrite = !isAgentTask(source) && (
+    settings.retryMode === 'overwriteAll' || (settings.retryMode === 'overwriteFailed' && source.status === 'error')
+  )
+  const taskId = overwrite ? source.id : genId()
+  const startedAt = Date.now()
+  const favoritePatch = !overwrite && settings.saveTasksToActiveFavoriteCollection && state.appMode === 'gallery'
+    ? getNewTaskFavoritePatch(state, getTaskFavoriteCollectionIds(source, state.defaultFavoriteCollectionId))
+    : null
   const newTask: TaskRecord = {
+    ...(overwrite ? source : {}),
+    ...favoritePatch,
     id: taskId,
-    prompt: task.prompt,
+    prompt: source.prompt,
     params: taskParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
     apiMode: activeProfile.apiMode,
     apiModel: activeProfile.model,
-    inputImageIds: [...task.inputImageIds],
-    maskTargetImageId: task.maskTargetImageId ?? null,
-    maskImageId: task.maskImageId ?? null,
+    inputImageIds: [...source.inputImageIds],
+    maskTargetImageId: source.maskTargetImageId ?? null,
+    maskImageId: source.maskImageId ?? null,
     transparentOutput: transparentMeta?.transparentOutput,
     transparentPrompt: transparentMeta?.effectivePrompt,
     outputImages: [],
+    outputErrors: undefined,
+    transparentOriginalImages: undefined,
+    actualParams: undefined,
+    actualParamsByImage: undefined,
+    revisedPromptByImage: undefined,
+    rawImageUrls: undefined,
+    rawResponsePayload: undefined,
+    streamPartialImageIds: undefined,
+    falRequestId: undefined,
+    falEndpoint: undefined,
+    falRecoverable: false,
+    customTaskId: undefined,
+    customRecoverable: false,
     status: 'running',
     error: null,
-    createdAt: Date.now(),
+    createdAt: overwrite ? source.createdAt : startedAt,
+    startedAt,
     finishedAt: null,
     elapsed: null,
   }
 
-  const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([newTask, ...latestTasks])
+  if (overwrite) {
+    taskExecutions.delete(taskId)
+    // 覆盖后不再属于原批量，完成时应正常提示
+    batchTaskIds.delete(taskId)
+    clearOpenAIWatchdogTimer(taskId)
+    clearFalRecoveryTimer(taskId)
+    clearCustomRecoveryTimer(taskId)
+    useStore.getState().setTaskStreamPreview(taskId)
+  }
+  useStore.getState().setTasks(overwrite
+    ? tasks.map((item) => item.id === taskId ? newTask : item)
+    : [newTask, ...tasks])
   await putTask(newTask)
+  if (overwrite) {
+    void deleteUnreferencedImageIds([
+      ...source.outputImages,
+      ...(source.transparentOriginalImages ?? []),
+      ...(source.streamPartialImageIds ?? []),
+    ])
+  }
 
   executeTask(taskId)
 }
@@ -5134,17 +4255,27 @@ export async function reuseConfig(task: TaskRecord) {
   const { settings, setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
-  const matchedProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
+  const taskProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
+  const matchedProfile = taskProfile && (!isPresetConfigOnlyEnabled() || isPresetProfile(taskProfile.id)) ? taskProfile : null
   const shouldTemporarilyReuseProfile = Boolean(matchedProfile && matchedProfile.id !== currentProfile.id)
   const missingReusedProfile = normalizedSettings.reuseTaskApiProfileTemporarily && !matchedProfile
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
-  const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(normalizedSettings, matchedProfile) : normalizedSettings
+  // 复用当前配置时，任务所用模型仍在模型列表中则同步切换首页选中的模型；临时复用其他配置时模型只随复用状态生效
+  const currentProfileRecord = normalizedSettings.profiles.find((item) => item.id === currentProfile.id)
+  if (!shouldTemporarilyReuseProfile && task.apiModel && currentProfileRecord && currentProfileRecord.selectedModel !== task.apiModel && splitModelList(currentProfileRecord.model).includes(task.apiModel)) {
+    useStore.getState().setSettings({
+      profiles: normalizedSettings.profiles.map((item) => item.id === currentProfile.id ? { ...item, selectedModel: task.apiModel } : item),
+    })
+  }
+  const reuseSettings = normalizeSettings(useStore.getState().settings)
+  const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(reuseSettings, matchedProfile) : reuseSettings
 
   setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
   setReusedTaskApiProfile(
     shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.id : null,
     missingReusedProfile,
     taskProfileName,
+    shouldTemporarilyReuseProfile && matchedProfile ? matchedProfile.model : null,
   )
   clearMaskDraft()
 
@@ -5157,7 +4288,8 @@ export async function reuseConfig(task: TaskRecord) {
     }
   }
   setInputImages(imgs)
-  setPrompt(task.prompt)
+  // 部分参考图可能已被删除，按图片 id 重新对齐提示词中的图片序号，避免评论和提及错位到其他图片
+  setPrompt(remapImageMentionsForOrder(task.prompt, task.inputImageIds.map((id) => ({ id, dataUrl: '' })), useStore.getState().inputImages))
   const maskTargetImageId = task.maskTargetImageId ?? (task.maskImageId ? task.inputImageIds[0] : null)
   if (maskTargetImageId && task.maskImageId && imgs.some((img) => img.id === maskTargetImageId)) {
     const maskDataUrl = await ensureImageCached(task.maskImageId)
@@ -5211,54 +4343,219 @@ export async function editOutputs(task: TaskRecord) {
   showToast(`已添加 ${added} 张输出图到输入`, 'success')
 }
 
+function getAgentRoundDeletionTaskIds(conversation: AgentConversation, round: AgentRound, tasks: TaskRecord[]) {
+  const messageIds = new Set(conversation.messages.filter((message) => message.roundId === round.id).map((message) => message.id))
+  messageIds.add(round.userMessageId)
+  if (round.assistantMessageId) messageIds.add(round.assistantMessageId)
+  return uniqueIds([
+    ...round.outputTaskIds,
+    ...conversation.messages
+      .filter((message) => messageIds.has(message.id))
+      .flatMap((message) => message.outputTaskIds ?? []),
+    ...tasks
+      .filter((task) => task.agentRoundId === round.id || Boolean(task.agentMessageId && messageIds.has(task.agentMessageId)))
+      .map((task) => task.id),
+  ])
+}
+
+function hasRunningAgentDeletionWork(conversationId: string, roundIds: Set<string>, taskIds: Set<string>, state: AppState) {
+  const conversation = state.agentConversations.find((item) => item.id === conversationId)
+  if (conversation?.rounds.some((round) => roundIds.has(round.id) && round.status === 'running')) return true
+  if (state.tasks.some((task) => taskIds.has(task.id) && task.status === 'running')) return true
+  for (const roundId of roundIds) {
+    const key = getAgentRoundControllerKey(conversationId, roundId)
+    const round = conversation?.rounds.find((item) => item.id === roundId)
+    const controller = agentRoundControllers.get(key)
+    if (controller && !controller.signal.aborted) return true
+    if (agentRecoveryContinuations.has(key) && round?.status !== 'done' && round?.error !== AGENT_STOPPED_MESSAGE) return true
+  }
+  return false
+}
+
+function cleanDeletedAgentReferences(conversation: AgentConversation, taskIds: Set<string>, assistantMessageIds: Set<string>, now: number) {
+  let changed = false
+  const rounds = conversation.rounds.map((round) => {
+    const outputTaskIds = round.outputTaskIds.filter((taskId) => !taskIds.has(taskId))
+    const clearAssistantMessage = Boolean(round.assistantMessageId && assistantMessageIds.has(round.assistantMessageId))
+    if (outputTaskIds.length === round.outputTaskIds.length && !clearAssistantMessage) return round
+    changed = true
+    return {
+      ...round,
+      ...(clearAssistantMessage ? { assistantMessageId: undefined } : {}),
+      outputTaskIds,
+    }
+  })
+  const messages = conversation.messages.map((message) => {
+    if (!message.outputTaskIds?.some((taskId) => taskIds.has(taskId))) return message
+    changed = true
+    return { ...message, outputTaskIds: message.outputTaskIds.filter((taskId) => !taskIds.has(taskId)) }
+  })
+  return changed ? { ...conversation, rounds, messages, updatedAt: now } : conversation
+}
+
+async function deleteAgentRoundAndTasks(conversationId: string, roundId: string): Promise<AgentDeletionResult> {
+  const state = useStore.getState()
+  const conversation = state.agentConversations.find((item) => item.id === conversationId)
+  const round = conversation?.rounds.find((item) => item.id === roundId)
+  if (!conversation || !round) return 'not-found'
+
+  const taskIds = new Set(getAgentRoundDeletionTaskIds(conversation, round, state.tasks))
+  if (hasRunningAgentDeletionWork(conversationId, new Set([roundId]), taskIds, state)) return 'running'
+
+  let deleted = false
+  try {
+    await removeTasks([...taskIds], (latest, deletedTaskIds) => {
+      const latestConversation = latest.agentConversations.find((item) => item.id === conversationId)
+      const latestRound = latestConversation?.rounds.find((item) => item.id === roundId)
+      if (!latestConversation || !latestRound) return null
+
+      const oldActivePath = getActiveAgentRounds(latestConversation)
+      const nextConversation = deleteAgentRoundFromConversation(latestConversation, roundId)
+      const newActivePath = getActiveAgentRounds(nextConversation)
+      const removedMessageIds = new Set([
+        latestRound.userMessageId,
+        ...(latestRound.assistantMessageId ? [latestRound.assistantMessageId] : []),
+        ...latestConversation.messages.filter((message) => message.roundId === roundId).map((message) => message.id),
+      ])
+      const removedAssistantMessageIds = new Set(latestConversation.messages
+        .filter((message) => message.role === 'assistant' && removedMessageIds.has(message.id))
+        .map((message) => message.id))
+      if (latestRound.assistantMessageId) removedAssistantMessageIds.add(latestRound.assistantMessageId)
+      const now = Date.now()
+      const agentConversations = latest.agentConversations.map((item) => {
+        const candidate = item.id === conversationId
+          ? { ...nextConversation, messages: nextConversation.messages.filter((message) => !removedMessageIds.has(message.id)) }
+          : item
+        return cleanDeletedAgentReferences(candidate, deletedTaskIds, removedAssistantMessageIds, now)
+      })
+      const agentInputDrafts = remapAgentInputDraftMentionsForPathChange(latest.agentInputDrafts, conversationId, oldActivePath, newActivePath)
+      deleted = true
+      return {
+        agentConversations,
+        agentInputDrafts,
+        ...(latest.activeAgentConversationId === conversationId && latest.appMode === 'agent'
+          ? { prompt: remapAgentRoundMentionsForPathChange(latest.prompt, oldActivePath, newActivePath) }
+          : {}),
+        agentEditingRoundId: latest.agentEditingRoundId === roundId ? null : latest.agentEditingRoundId,
+      }
+    })
+  } catch (err) {
+    if (!deleted) throw err
+    console.warn('Agent 轮次已删除，但持久化或图片清理失败', err)
+    return 'deleted-with-warning'
+  }
+  return deleted ? 'deleted' : 'not-found'
+}
+
+async function deleteAgentAssistantMessageAndTasks(conversationId: string, messageId: string): Promise<AgentDeletionResult> {
+  const state = useStore.getState()
+  const conversation = state.agentConversations.find((item) => item.id === conversationId)
+  const message = conversation?.messages.find((item) => item.id === messageId && item.role === 'assistant')
+  if (!conversation || !message) return 'not-found'
+
+  const round = conversation.rounds.find((item) => item.id === message.roundId)
+  const taskIds = new Set(uniqueIds([
+    ...(message.outputTaskIds ?? []),
+    ...(round ? getAgentRoundDeletionTaskIds(conversation, round, state.tasks) : []),
+    ...state.tasks.filter((task) => task.agentMessageId === messageId).map((task) => task.id),
+  ]))
+  const referencedRoundIds = new Set([
+    message.roundId,
+    ...conversation.rounds.filter((item) => item.assistantMessageId === messageId).map((item) => item.id),
+  ])
+  if (hasRunningAgentDeletionWork(conversationId, referencedRoundIds, taskIds, state)) return 'running'
+
+  let deleted = false
+  try {
+    await removeTasks([...taskIds], (latest, deletedTaskIds) => {
+      const latestConversation = latest.agentConversations.find((item) => item.id === conversationId)
+      const latestMessage = latestConversation?.messages.find((item) => item.id === messageId && item.role === 'assistant')
+      if (!latestConversation || !latestMessage) return null
+
+      const now = Date.now()
+      const assistantMessageIds = new Set([messageId])
+      const agentConversations = latest.agentConversations.map((item) => {
+        const candidate = item.id === conversationId
+          ? { ...item, messages: item.messages.filter((current) => current.id !== messageId), updatedAt: now }
+          : item
+        return cleanDeletedAgentReferences(candidate, deletedTaskIds, assistantMessageIds, now)
+      })
+      deleted = true
+      return { agentConversations }
+    })
+  } catch (err) {
+    if (!deleted) throw err
+    console.warn('Agent 消息已删除，但持久化或图片清理失败', err)
+    return 'deleted-with-warning'
+  }
+  return deleted ? 'deleted' : 'not-found'
+}
+
+type TaskDeletionStateUpdater = (state: AppState, taskIds: Set<string>) => Partial<AppState> | null
+
+async function removeTasks(taskIds: string[], updateState?: TaskDeletionStateUpdater) {
+  const toDelete = new Set(taskIds)
+  let deletedTasks: TaskRecord[] = []
+  useStore.setState((state) => {
+    deletedTasks = state.tasks.filter((task) => toDelete.has(task.id))
+    const streamPreviews = { ...state.streamPreviews }
+    const streamPreviewSlots = { ...state.streamPreviewSlots }
+    for (const taskId of toDelete) {
+      delete streamPreviews[taskId]
+      delete streamPreviewSlots[taskId]
+    }
+    return {
+      tasks: state.tasks.filter((task) => !toDelete.has(task.id)),
+      selectedTaskIds: state.selectedTaskIds.filter((id) => !toDelete.has(id)),
+      streamPreviews,
+      streamPreviewSlots,
+    }
+  })
+  if (deletedTasks.length === 0 && !updateState) return 0
+
+  const deletedImageIds = new Set<string>()
+  for (const task of deletedTasks) {
+    addTaskReferencedImageIds(deletedImageIds, task)
+    const controller = task.agentConversationId && task.agentRoundId
+      ? agentRoundControllers.get(getAgentRoundControllerKey(task.agentConversationId, task.agentRoundId))
+      : undefined
+    if (controller) deletedActiveAgentTasks.set(task.id, { task, controller })
+    clearFalRecoveryTimer(task.id)
+    clearCustomRecoveryTimer(task.id)
+    clearOpenAIWatchdogTimer(task.id)
+    taskExecutions.delete(task.id)
+  }
+
+  const cleanup = scrubAgentOutputPayloadsForDeletedTasks(deletedTasks)
+  const domainUpdatedConversations: AgentConversation[] = []
+  if (updateState) {
+    useStore.setState((state) => {
+      const patch = updateState(state, toDelete)
+      if (!patch) return state
+      if (patch.agentConversations) {
+        const previousById = new Map(state.agentConversations.map((conversation) => [conversation.id, conversation]))
+        domainUpdatedConversations.push(...patch.agentConversations.filter((conversation) => previousById.get(conversation.id) !== conversation))
+      }
+      return patch
+    })
+  }
+  const updatedConversations = new Map(cleanup.updatedConversations.map((conversation) => [conversation.id, conversation]))
+  for (const conversation of domainUpdatedConversations) updatedConversations.set(conversation.id, conversation)
+  await persistTaskDeletionCleanup(deletedTasks.map((task) => task.id), {
+    ...cleanup,
+    updatedConversations: [...updatedConversations.values()],
+  })
+  await deleteUnreferencedImageIds(deletedImageIds)
+  return deletedTasks.length
+}
+
 /** 删除多条任务 */
 export async function removeMultipleTasks(taskIds: string[]) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, selectedTaskIds } = useStore.getState()
-  
   if (!taskIds.length) return
 
-  const toDelete = new Set(taskIds)
-  const deletedTasks = tasks.filter(t => toDelete.has(t.id))
-  const remaining = await scrubAgentOutputPayloadsForDeletedTasks(deletedTasks, tasks.filter(t => !toDelete.has(t.id)))
-
-  // 收集所有被删除任务的关联图片
-  const deletedImageIds = new Set<string>()
-  for (const t of tasks) {
-    if (toDelete.has(t.id)) {
-      addTaskReferencedImageIds(deletedImageIds, t)
-    }
-  }
-
-  setTasks(remaining)
-  for (const id of taskIds) {
-    await dbDeleteTask(id)
-  }
-
-  // 找出其他任务仍引用的图片
-  const stillUsed = new Set<string>()
-  for (const t of remaining) {
-    addTaskReferencedImageIds(stillUsed, t)
-  }
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
-
-  // 删除孤立图片
-  for (const imgId of deletedImageIds) {
-    if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
-    }
-  }
-
-  // 如果删除的任务在选中列表中，则移除
-  const newSelection = selectedTaskIds.filter(id => !toDelete.has(id))
-  if (newSelection.length !== selectedTaskIds.length) {
-    useStore.getState().setSelectedTaskIds(newSelection)
-  }
-
-  showToast(`已删除 ${taskIds.length} 个任务`, 'success')
+  const deletedCount = await removeTasks(taskIds)
+  if (deletedCount === 0) return
+  useStore.getState().showToast(`已删除 ${deletedCount} 个任务`, 'success')
 }
 
 /** 删除所有失败任务 */
@@ -5289,41 +4586,9 @@ export async function clearFailedTasks(taskIds?: string[]) {
 
 /** 删除单条任务 */
 export async function removeTask(task: TaskRecord) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast } = useStore.getState()
-
-  // 收集此任务关联的图片
-  const taskImageIds = new Set([
-    ...(task.inputImageIds || []),
-    ...(task.maskImageId ? [task.maskImageId] : []),
-    ...(task.outputImages || []),
-    ...(task.transparentOriginalImages || []),
-    ...(task.streamPartialImageIds || []),
-  ])
-
-  // 从列表移除
-  const remaining = await scrubAgentOutputPayloadsForDeletedTasks([task], tasks.filter((t) => t.id !== task.id))
-  setTasks(remaining)
-  await dbDeleteTask(task.id)
-
-  // 找出其他任务仍引用的图片
-  const stillUsed = new Set<string>()
-  for (const t of remaining) {
-    addTaskReferencedImageIds(stillUsed, t)
-  }
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
-
-  // 删除孤立图片
-  for (const imgId of taskImageIds) {
-    if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
-    }
-  }
-
-  showToast('任务已删除', 'success')
+  const deletedCount = await removeTasks([task.id])
+  if (deletedCount === 0) return
+  useStore.getState().showToast('任务已删除', 'success')
 }
 
 /** 清空数据选项 */
@@ -5335,28 +4600,40 @@ export interface ClearOptions {
 /** 清空数据 */
 export async function clearData(options: ClearOptions = { clearConfig: true, clearTasks: true }) {
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
+  // 清空后剩余的批量提示词已没有对应的任务、配置或图片，直接结束批量
+  if (useStore.getState().batchProgress) endBatch(activeBatchId)
 
   if (options.clearTasks) {
     await dbClearTasks()
     await dbClearAgentConversations()
     await clearImages()
-    imageCache.clear()
-    thumbnailCache.clear()
-    thumbnailBackfillIds.clear()
+    clearImageCaches()
     setTasks([])
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
       supportPromptOpen: false,
       supportPromptSkippedForImportedData: false,
+      imageSourceUrls: {},
     })
     clearInputImages()
     clearMaskDraft()
   }
 
   if (options.clearConfig) {
-    useStore.setState({ dismissedCodexCliPrompts: [], supportPromptDismissed: false })
-    setSettings({ ...MIANYUN_DEFAULT_SETTINGS })
+    const presetConfig = getPresetConfig()
+    useStore.setState({
+      dismissedPresetProfileIds: [],
+      dismissedPresetProviderIds: [],
+      dismissedCodexCliPrompts: [],
+      supportPromptDismissed: false,
+    })
+    if (presetConfig) {
+      useStore.setState({ settings: { ...MIANYUN_DEFAULT_SETTINGS } })
+      await useStore.getState().setPresetImportedSettings(presetConfig)
+    } else {
+      setSettings({ ...MIANYUN_DEFAULT_SETTINGS })
+    }
     setParams({ ...DEFAULT_PARAMS })
   }
 
@@ -5382,15 +4659,14 @@ async function completeRecoveredCustomTask(task: TaskRecord, result: Awaited<Ret
     actualParams: firstActualParams(actualParamsList),
     actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
     revisedPromptByImage: undefined,
-    status: 'done',
-    error: null,
+    ...createTaskDonePatch(task, Date.now()),
     customRecoverable: false,
-    finishedAt: Date.now(),
-    elapsed: Date.now() - task.createdAt,
   })
-  useStore.getState().showToast(`自定义异步任务已恢复，共 ${outputIds.length} 张图片`, 'success')
-  if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `自定义异步任务已恢复，共 ${outputIds.length} 张图片。`)
-  else void continueRecoveredAgentRound(task.id)
+  if (!isTaskHiddenByPrivacyMode(task)) {
+    useStore.getState().showToast(`自定义异步任务已恢复，共 ${outputIds.length} 张图片`, 'success')
+    if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `自定义异步任务已恢复，共 ${outputIds.length} 张图片。`)
+  }
+  if (isAgentTask(task)) void continueRecoveredAgentRound(task.id)
 }
 
 async function recoverCustomTask(taskId: string) {
@@ -5399,7 +4675,7 @@ async function recoverCustomTask(taskId: string) {
   if (!task || !task.customTaskId || task.status === 'done') return
 
   const profile = getCustomRecoveryProfile(settings, task)
-  const customProvider = task.apiProvider ? getCustomProviderDefinition(settings, task.apiProvider) : null
+  const customProvider = profile ? getCustomProviderDefinition(settings, profile.provider) : null
   if (!profile || !customProvider?.poll) {
     scheduleCustomRecovery(taskId)
     return
@@ -5411,14 +4687,14 @@ async function recoverCustomTask(taskId: string) {
     await completeRecoveredCustomTask(task, result)
   } catch (err) {
     clearCustomRecoveryTimer(taskId)
+    if (!useStore.getState().tasks.some((item) => item.id === taskId)) return
+    const error = err instanceof Error ? err.message : String(err)
     updateTaskInStore(taskId, {
-      status: 'error',
-      error: err instanceof Error ? err.message : String(err),
+      ...createTaskErrorPatch(task, error, Date.now()),
       ...getRawErrorPayload(err),
       customRecoverable: false,
-      finishedAt: Date.now(),
-      elapsed: Date.now() - task.createdAt,
     })
+    showTaskFailureNotification(task)
     if (isAgentTask(task)) void continueRecoveredAgentRound(taskId)
   }
 }
@@ -5431,9 +4707,12 @@ export interface ExportOptions {
 
 /** 导出数据为 ZIP */
 export async function exportData(options: ExportOptions = { exportConfig: true, exportTasks: true }) {
+  // 导出全程可取消：网页版放弃后续下载，客户端丢弃正在写入的临时文件
+  const signal = startDataProgress('export', true)
+  let savedParts = 0
   try {
     const state = useStore.getState()
-    if (options.exportTasks && hasActiveDataOperations(state.tasks, state.agentConversations)) throw new Error('当前有任务正在进行，请完成或停止后再导出。')
+    if (options.exportTasks && hasActiveDataOperations(state.tasks, state.agentConversations)) throw new Error('有任务正在进行，完成或停止后再导出。')
     const tasks = options.exportTasks ? await getAllTasks() : []
     const imageIds = options.exportTasks ? await getAllImageIds() : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId } = state
@@ -5444,39 +4723,39 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       settings,
       tasks,
       imageTasks: tasks,
+      imageSourceUrls: state.imageSourceUrls,
       favoriteCollections,
       defaultFavoriteCollectionId,
       agentConversations: options.exportTasks ? getPersistableAgentConversations(agentConversations) : [],
     }
-    const imageSizes = []
-    for (const id of imageIds) {
-      const image = await getImage(id)
-      if (!image) continue
-      const thumbnail = await getImageThumbnail(id)
-      imageSizes.push({ id, bytes: getExportImageEstimatedBytes(image, thumbnail) })
-    }
+    // 进度回调中检查取消，逐张读取时也能及时中断
+    const imageSizes = await getExportImageSizes(imageIds, (done) => {
+      throwIfAborted(signal)
+      updateDataProgress('统计图片', done, imageIds.length, 'image')
+    })
+    throwIfAborted(signal)
     const plan = getExportZipPlan(params, imageSizes)
     const backupId = `${exportedAt}`
+    // 客户端分卷备份时先选择目录，一次写入全部分卷，替代浏览器的多文件下载
+    if (isTauri && plan.length > 1) updateDataProgress('选择保存位置')
+    const dir = isTauri && plan.length > 1 ? await pickSaveDir() : null
+    if (isTauri && plan.length > 1 && !dir) return
+    let savedPath = ''
+    const imageTotal = plan.reduce((sum, part) => sum + part.imageIds.length, 0)
+    let imagesRead = 0
 
     for (let index = 0; index < plan.length; index++) {
-      const images: StoredImage[] = []
-      const thumbnailsByImageId = new Map<string, StoredImageThumbnail>()
-      for (const id of plan[index].imageIds) {
-        const image = await getImage(id)
-        if (!image) continue
-        images.push(image)
-        const thumbnail = await getImageThumbnail(id)
-        if (!thumbnail?.thumbnailDataUrl) continue
-        thumbnailsByImageId.set(id, thumbnail)
-        cacheThumbnail(id, {
-          dataUrl: thumbnail.thumbnailDataUrl,
-          width: thumbnail.width,
-          height: thumbnail.height,
-          thumbnailVersion: thumbnail.thumbnailVersion,
-        })
-      }
-
       const partNumber = index + 1
+      const partLabel = plan.length > 1 ? `（第 ${partNumber} / ${plan.length} 卷）` : ''
+      throwIfAborted(signal)
+      const { images, thumbnailsByImageId } = await readExportImages(plan[index].imageIds, (done) => {
+        throwIfAborted(signal)
+        updateDataProgress(`读取图片${partLabel}`, imagesRead + done, imageTotal, 'image')
+      })
+      imagesRead += plan[index].imageIds.length
+      throwIfAborted(signal)
+      updateDataProgress(`打包${partLabel}`)
+
       const result = await buildExportZip({
         ...params,
         tasks: plan[index].tasks,
@@ -5486,23 +4765,37 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
         includeManifestData: plan[index].includeBaseData,
         backupPart: plan.length > 1 ? { id: backupId, index: partNumber, total: plan.length } : undefined,
       })
-      const blob = createExportBlob(result.bytes)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
       const suffix = plan.length > 1 ? `_${String(plan.length).padStart(2, '0')}parts_part${String(partNumber).padStart(2, '0')}` : ''
-      a.href = url
-      a.download = `gpt-image-playground-backup_${formatExportFileTime(new Date(exportedAt))}${suffix}.zip`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      const fileName = `gpt-image-playground-backup_${formatExportFileTime(new Date(exportedAt))}${suffix}.zip`
+      throwIfAborted(signal)
+      updateDataProgress(`保存文件${partLabel}`)
+      const saveOpts: SaveOptions = { signal, onProgress: (written, total) => updateDataProgress(`保存文件${partLabel}`, written, total, 'byte') }
+      if (dir) {
+        await saveFileToDir(dir, result.bytes, fileName, saveOpts)
+        savedParts++
+        continue
+      }
+      // 客户端直接传字节给 Rust 写入，不再复制一份 Blob
+      const saved = await saveFile(isTauri ? result.bytes : createExportBlob(result.bytes), fileName, saveOpts)
+      if (!saved) return
+      savedParts++
+      savedPath = saved
       if (partNumber < plan.length) await new Promise((resolve) => setTimeout(resolve, 150))
     }
-    useStore.getState().showToast(plan.length > 1 ? `已请求下载 ${plan.length} 个 ZIP，请确认浏览器已允许多文件下载` : '数据已导出', 'success')
+    const msg = dir
+      ? `已导出 ${plan.length} 个 ZIP 到 ${dir.path}`
+      : plan.length > 1 ? `正在下载 ${plan.length} 个 ZIP，如被浏览器拦截，请允许多文件下载` : isTauri ? `已导出到 ${savedPath}` : '数据已导出'
+    useStore.getState().showToast(msg, 'success')
   } catch (e) {
+    if (signal.aborted) {
+      useStore.getState().showToast(savedParts ? `已取消导出，已${isTauri ? '保存' : '下载'}的 ${savedParts} 个分卷不完整，可以删除` : '已取消导出', 'info')
+      return
+    }
     console.error('exportData failed', e)
     const detail = e instanceof Error ? e.message.trim() : String(e).trim()
-    useStore.getState().showToast(detail ? `导出失败，${detail}` : '导出失败，未知错误', 'error')
+    useStore.getState().showToast(detail ? `导出失败，${detail}` : '导出失败', 'error')
+  } finally {
+    endDataProgress()
   }
 }
 
@@ -5512,51 +4805,78 @@ export interface ImportOptions {
   importTasks?: boolean
 }
 
+export async function restoreExplicitPresetConfig(ids: { providerIds: string[], profileIds: string[] }) {
+  const presetProviderIds = getPresetProviderIds()
+  const presetProfileIds = getPresetProfileIds()
+  const providerIds = ids.providerIds.filter((id) => presetProviderIds.has(id))
+  const profileIds = ids.profileIds.filter((id) => presetProfileIds.has(id))
+  if (!providerIds.length && !profileIds.length) return false
+
+  const state = useStore.getState()
+  for (const id of providerIds) state.restorePresetProvider(id)
+  for (const id of profileIds) state.restorePresetProfile(id)
+  const presetConfig = getPresetConfig()
+  if (presetConfig) await useStore.getState().setPresetImportedSettings(presetConfig)
+  return true
+}
+
 /** 导入 ZIP 数据 */
 export async function importData(input: File | File[], options: ImportOptions = { importConfig: true, importTasks: true }): Promise<boolean> {
+  // 只允许在解析备份阶段取消；开始写入后取消会留下半份数据
+  const signal = startDataProgress('import', true)
   try {
     const state = useStore.getState()
-    if (options.importTasks && hasActiveDataOperations(state.tasks, state.agentConversations)) throw new Error('当前有任务正在进行，请完成或停止后再导入。')
+    if (options.importTasks && hasActiveDataOperations(state.tasks, state.agentConversations)) throw new Error('有任务正在进行，完成或停止后再导入。')
     const files = Array.isArray(input) ? input : [input]
     if (!files.length) throw new Error('没有选择备份文件。')
     if (files.some((file) => file.size >= MAX_EXPORT_ZIP_BYTES)) {
-      throw new Error('单个 ZIP 不能达到或超过 2 GB，请选择分片备份。')
+      throw new Error('单个 ZIP 不能超过 2 GB，请使用分卷备份。')
     }
 
     const selected = [] as Array<{ file: File; manifest: Awaited<ReturnType<typeof readExportZipManifest>> }>
-    for (const file of files) {
+    for (const [idx, file] of files.entries()) {
+      updateDataProgress('解析备份', idx, files.length > 1 ? files.length : 0, files.length > 1 ? 'file' : undefined)
       const manifest = await readExportZipManifest(new Uint8Array(await file.arrayBuffer()), options.importTasks)
       selected.push({ file, manifest })
+      throwIfAborted(signal)
     }
     const multipart = selected.some((part) => part.manifest.backupPart != null)
     if (multipart) {
-      if (selected.some((part) => !part.manifest.backupPart)) throw new Error('不能混合选择分片备份和普通备份。')
+      if (selected.some((part) => !part.manifest.backupPart)) throw new Error('不能同时选择分卷备份和普通备份。')
       const first = selected[0].manifest.backupPart!
       const indexes = new Set(selected.map((part) => part.manifest.backupPart!.index))
       const validSet = selected.every((part) => {
         const backupPart = part.manifest.backupPart!
         return backupPart.id === first.id && backupPart.total === first.total && backupPart.index >= 1 && backupPart.index <= first.total
       })
-      if (!validSet || indexes.size !== selected.length) throw new Error('所选分片不属于同一批备份或包含重复分片。')
+      if (!validSet || indexes.size !== selected.length) throw new Error('所选分卷不属于同一份备份，或有重复。')
       if (options.importTasks && (selected.length !== first.total || indexes.size !== first.total)) {
-        throw new Error(`分片备份不完整，请一次选择同一备份的全部 ${first.total} 个 ZIP。`)
+        throw new Error(`分卷不全，请一次选择全部 ${first.total} 个 ZIP。`)
       }
       selected.sort((a, b) => a.manifest.backupPart!.index - b.manifest.backupPart!.index)
-    } else if (selected.length > 1) {
-      throw new Error('多个普通备份不能同时导入，请每次选择一个 ZIP。')
     }
 
-    const data = selected.find((part) => part.manifest.settings)?.manifest ?? selected[0].manifest
-    if (options.importConfig && !options.importTasks && !data.settings) throw new Error('所选分片不包含配置数据。')
+    const settingsManifests = selected.filter((part) => part.manifest.settings)
+    if (options.importConfig && !options.importTasks && !settingsManifests.length) throw new Error('这份备份里没有配置。')
     const importedTasks = selected.flatMap((part) => part.manifest.tasks ?? [])
     const importedAgentConversations = selected.flatMap((part) => part.manifest.agentConversations ?? [])
     const hasTaskData = selected.some((part) => part.manifest.tasks != null || part.manifest.imageFiles != null)
 
+    // 先关闭取消再检查，确保点了取消就不会进入写入阶段
+    setDataProgressCancelable(false)
+    throwIfAborted(signal)
+
     const importedImageIds: string[] = []
     if (options.importTasks && hasTaskData) {
-      for (const part of selected) {
+      // 原图和缩略图合并计数，分片交替写入时进度条也只增不减
+      const fileTotal = selected.reduce((sum, part) => sum + Object.keys(part.manifest.imageFiles ?? {}).length + Object.keys(part.manifest.thumbnailFiles ?? {}).length, 0)
+      let filesDone = 0
+      for (const [idx, part] of selected.entries()) {
+        updateDataProgress(selected.length > 1 ? `读取备份（第 ${idx + 1} / ${selected.length} 个）` : '读取备份', filesDone, fileTotal, 'file')
         const { manifest, files: zipFiles } = await readExportZip(new Uint8Array(await part.file.arrayBuffer()))
         for (const [id, info] of Object.entries(manifest.imageFiles ?? {})) {
+          // 先计入当前文件，写到最后一个时进度到 100%
+          updateDataProgress('写入图片和缩略图', ++filesDone, fileTotal, 'file')
           const dataUrl = readExportZipFileAsDataUrl(zipFiles, info.path)
           if (!dataUrl) continue
           await putImage({
@@ -5568,10 +4888,16 @@ export async function importData(input: File | File[], options: ImportOptions = 
             height: info.height,
           })
           cacheImage(id, dataUrl)
+          // 备份文件来自外部，只接受 http(s) 链接
+          if (isHttpUrl(info.sourceUrl)) {
+            const sourceUrl = info.sourceUrl
+            useStore.setState((s) => ({ imageSourceUrls: { ...s.imageSourceUrls, [id]: sourceUrl } }))
+          }
           importedImageIds.push(id)
         }
 
         for (const [id, info] of Object.entries(manifest.thumbnailFiles ?? {})) {
+          updateDataProgress('写入图片和缩略图', ++filesDone, fileTotal, 'file')
           const thumbnailDataUrl = readExportZipFileAsDataUrl(zipFiles, info.path)
           if (!thumbnailDataUrl) continue
           await putImageThumbnail({
@@ -5582,7 +4908,7 @@ export async function importData(input: File | File[], options: ImportOptions = 
             thumbnailVersion: info.thumbnailVersion,
           })
           cacheThumbnail(id, {
-            dataUrl: thumbnailDataUrl,
+            src: thumbnailDataUrl,
             width: info.width,
             height: info.height,
             thumbnailVersion: info.thumbnailVersion,
@@ -5590,18 +4916,22 @@ export async function importData(input: File | File[], options: ImportOptions = 
         }
       }
 
+      updateDataProgress('写入任务和会话')
       for (const task of importedTasks) {
-        await putTask(task)
+        // startedAt 来自导入文件，非法值会让计时和“重试于”显示异常
+        await putTask(Number.isFinite(task.startedAt) || task.startedAt === undefined ? task : { ...task, startedAt: undefined })
       }
 
       const tasks = await getAllTasks()
       const state = useStore.getState()
-      const importedCollections = normalizeFavoriteCollections(data.favoriteCollections)
-      const favoriteCollections = importedCollections.length
-        ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections([...state.favoriteCollections, ...importedCollections]))
-        : state.favoriteCollections
-      const defaultFavoriteCollectionId = importedCollections.length
-        ? resolveDefaultFavoriteCollectionId(favoriteCollections, data.defaultFavoriteCollectionId)
+      const importedFavoriteCollections = selected.flatMap((part) => part.manifest.favoriteCollections ?? [])
+      const mergedFavorites = mergeFavoriteCollections(state.favoriteCollections, importedFavoriteCollections)
+      const favoriteCollections = mergedFavorites.collections
+      const importedDefaultFavoriteCollectionId = selected
+        .map((part) => part.manifest.defaultFavoriteCollectionId)
+        .find((id) => id != null && favoriteCollections.some((collection) => collection.id === id))
+      const defaultFavoriteCollectionId = mergedFavorites.importedCollections.length
+        ? resolveDefaultFavoriteCollectionId(favoriteCollections, importedDefaultFavoriteCollectionId)
         : state.defaultFavoriteCollectionId
       const normalizedFavorites = normalizeLoadedFavoriteState(tasks, favoriteCollections, defaultFavoriteCollectionId)
       useStore.setState({
@@ -5624,28 +4954,53 @@ export async function importData(input: File | File[], options: ImportOptions = 
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)
       skipSupportPromptForImportedData(tasks)
-      scheduleThumbnailBackfill(importedImageIds)
+      void scheduleMissingThumbnailBackfill(importedImageIds)
     }
 
-    if (options.importConfig && data.settings) {
+    if (options.importConfig && settingsManifests.length) {
       const state = useStore.getState()
-      state.setSettings(mergeImportedSettings(state.settings, data.settings))
+      const providerIds = new Set(settingsManifests.flatMap((part) =>
+        part.manifest.settings?.customProviders?.map((provider) => provider.id) ?? [],
+      ))
+      const profileIds = new Set(settingsManifests.flatMap((part) =>
+        part.manifest.settings?.profiles.map((profile) => profile.id) ?? [],
+      ))
+      const presetProviderIds = getPresetProviderIds()
+      const presetProfileIds = getPresetProfileIds()
+      for (const id of providerIds) {
+        if (presetProviderIds.has(id)) state.restorePresetProvider(id)
+      }
+      for (const id of profileIds) {
+        if (presetProfileIds.has(id)) state.restorePresetProfile(id)
+      }
+      const current = useStore.getState()
+      const settings = settingsManifests.reduce(
+        (current, part) => mergeImportedSettings(current, part.manifest.settings, { preserveInternalIds: true }),
+        current.settings,
+      )
+      current.setSettings(settings)
     }
 
-    let msg = '数据已成功导入'
+    let msg = '导入完成'
     if (options.importTasks && hasTaskData) {
       msg = `已导入 ${importedTasks.length} 个任务`
-    } else if (options.importConfig && data.settings) {
-      msg = '配置已成功导入'
+    } else if (options.importConfig && settingsManifests.length) {
+      msg = '配置已导入'
     }
 
     useStore.getState().showToast(msg, 'success')
     return true
   } catch (e) {
+    if (signal.aborted) {
+      useStore.getState().showToast('已取消导入', 'info')
+      return false
+    }
     console.error('importData failed', e)
     const detail = e instanceof Error ? e.message.trim() : String(e).trim()
-    useStore.getState().showToast(detail ? `导入失败，${detail}` : '导入失败，未知错误', 'error')
+    useStore.getState().showToast(detail ? `导入失败，${detail}` : '导入失败', 'error')
     return false
+  } finally {
+    endDataProgress()
   }
 }
 
@@ -5661,17 +5016,21 @@ export async function createInputImageFromFile(file: File): Promise<InputImage |
   const dataUrl = await fileToDataUrl(file)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
+  // 本地添加的图片即使与链接添加的内容相同，也不再沿用当时的链接，以免提交已过期的链接
+  forgetImageSourceUrl(id)
   return { id, dataUrl }
 }
 
-/** 添加图片到输入（右键菜单）—— 支持 data/blob/http URL */
+/** 添加图片到输入（右键菜单、添加链接）—— 支持 data/blob/http URL */
 export async function addImageFromUrl(src: string): Promise<void> {
-  const res = await fetch(src)
+  const res = await apiFetch(src)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const blob = await res.blob()
   if (!blob.type.startsWith('image/')) throw new Error('不是有效的图片')
   const dataUrl = await blobToDataUrl(blob)
   const id = await storeImage(dataUrl, 'upload')
   cacheImage(id, dataUrl)
+  // 内容相同的图片共用一个 id，记录最近一次添加的链接
+  if (isHttpUrl(src)) useStore.setState((s) => ({ imageSourceUrls: { ...s.imageSourceUrls, [id]: src } }))
   useStore.getState().addInputImage({ id, dataUrl })
 }
-

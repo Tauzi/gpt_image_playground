@@ -1,11 +1,94 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
 import { createDefaultOpenAIProfile, DEFAULT_SETTINGS } from './apiProfiles'
-import { callAgentConversationTitleApi, callAgentResponsesApi } from './agentApi'
+import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments } from './agentApi'
+
+describe('parseBatchImageCallArguments', () => {
+  it('trims ids and prompts, fills missing ids, and skips empty prompts', () => {
+    expect(parseBatchImageCallArguments(JSON.stringify({ images: [
+      { id: ' hero ', prompt: ' first prompt ' },
+      { id: '   ', prompt: 'blank id' },
+      { prompt: 'missing id' },
+      { id: 'skipped', prompt: '   ' },
+    ] }))).toEqual([
+      { id: 'hero', prompt: 'first prompt' },
+      { id: 'image_2', prompt: 'blank id' },
+      { id: 'image_3', prompt: 'missing id' },
+    ])
+  })
+
+  it('makes duplicate and colliding ids deterministically unique', () => {
+    const args = JSON.stringify({ images: [
+      { id: 'same', prompt: 'one' },
+      { id: ' same ', prompt: 'two' },
+      { id: 'same_2', prompt: 'three' },
+      { id: 'same', prompt: 'four' },
+    ] })
+
+    expect(parseBatchImageCallArguments(args)).toEqual([
+      { id: 'same', prompt: 'one' },
+      { id: 'same_2', prompt: 'two' },
+      { id: 'same_2_2', prompt: 'three' },
+      { id: 'same_3', prompt: 'four' },
+    ])
+    expect(parseBatchImageCallArguments(args)).toEqual(parseBatchImageCallArguments(args))
+  })
+})
+
+describe('callBatchImageSingle', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('reports the image tool error without a misleading streaming hint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      error: { message: "Tool choice 'required' must be specified with 'tools' parameter." },
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } }))
+
+    const result = await callBatchImageSingle({
+      profile: createDefaultOpenAIProfile({ apiKey: 'test-key', apiMode: 'responses', streamImages: true }),
+      params: DEFAULT_PARAMS,
+      batchItemId: 'image_1',
+      prompt: 'prompt',
+      referenceImageDataUrls: [],
+    })
+
+    expect(result).toMatchObject({
+      batchItemId: 'image_1',
+      image: null,
+      error: "Tool choice 'required' must be specified with 'tools' parameter.\n提示：当前使用的 API 可能未正确转发图像生成工具，请尝试更换支持该工具的接口或模型。",
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('callAgentResponsesApi', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('收到响应头后流式停顿时仍按超时中止，并给出中文原因', async () => {
+    // 与浏览器一致：信号中止后，读取中的响应体以 signal.reason 报错
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const signal = (init as RequestInit).signal!
+      const body = new ReadableStream<Uint8Array>({
+        start: (ctrl) => {
+          ctrl.enqueue(new TextEncoder().encode('data: {"type":"response.output_text.delta","delta":"Hel"}\n\n'))
+          signal.addEventListener('abort', () => ctrl.error(signal.reason))
+        },
+      })
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    })
+    const profile = createDefaultOpenAIProfile({ apiKey: 'test-key', apiMode: 'responses', streamImages: true, timeout: 0.05 })
+
+    const err = await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: DEFAULT_PARAMS,
+      input: 'prompt',
+    }).catch((e) => e)
+
+    expect(err).toMatchObject({ name: 'AbortError', message: '请求超时：超过 0.05 秒仍未完成，请稍后重试或提高超时时间。' })
   })
 
   it('streams Agent text and requests configured partial images', async () => {
@@ -29,6 +112,8 @@ describe('callAgentResponsesApi', () => {
       apiMode: 'responses',
       streamImages: true,
       streamPartialImages: 2,
+      reasoningEffort: 'xhigh',
+      imageGenerationModel: 'gpt-image-2.5-flare',
     })
 
     const result = await callAgentResponsesApi({
@@ -42,6 +127,8 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.stream).toBe(true)
+    expect(body.reasoning).toEqual({ effort: 'xhigh' })
+    expect(body.tools[0].model).toBe('gpt-image-2.5-flare')
     expect(body.tools[0].partial_images).toBe(2)
     expect(textDeltas).toEqual(['Hel', 'lo'])
     expect(result).toMatchObject({
@@ -120,6 +207,32 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.tools[0].input_image_mask).toEqual({ image_url: 'data:image/png;base64,bWFzaw==' })
+  })
+
+  it('requires resolution in Agent prompts and omits the Codex CLI size parameter', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK' }] }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      codexCli: true,
+    })
+
+    await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: { ...DEFAULT_PARAMS, size: '1024x1024' },
+      input: 'prompt',
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.tools[0].size).toBeUndefined()
+    expect(body.instructions).toContain('Start every image prompt with exactly "Generate at 1024x1024 resolution." followed by a space.')
   })
 
   it('extracts image_generation results from base64 object fields', async () => {
@@ -204,6 +317,7 @@ describe('callAgentResponsesApi', () => {
       apiKey: 'test-key',
       apiMode: 'responses',
       streamImages: true,
+      reasoningEffort: 'max',
     })
 
     const title = await callAgentConversationTitleApi({
@@ -215,6 +329,8 @@ describe('callAgentResponsesApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.instructions).toContain('<title>short title</title>')
+    expect(body.reasoning).toEqual({ effort: 'max' })
+    expect(body.max_output_tokens).toBeUndefined()
     expect(body.tools).toBeUndefined()
     expect(body.stream).toBeUndefined()
     expect(body.input[0].content[0].text).toContain('帮我生成一张橘猫头像，要赛博朋克风格')

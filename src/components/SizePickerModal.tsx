@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { calculateImageSize, normalizeCodexCliImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
 const SIZE_LIMIT_TEXT = '精确尺寸会原样发送，必须满足：\n宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，并符合当前分辨率档位的像素预算。'
+const CODEX_CLI_SIZE_LIMIT_TEXT = '由于模型和 Codex CLI 限制，不符合要求的分辨率会被自动规整：\n宽高均为 16 的倍数，宽高比不超过 3:1，分辨率不超过 1K。'
+const CLAMPED_SIZE_TEXT = '由于模型限制，原始分辨率已被自动规整'
 const DEFAULT_RATIOS = [
   { label: '1:1', value: '1:1' },
   { label: '5:4', value: '5:4' },
@@ -41,6 +43,7 @@ interface Props {
   onSelect: (size: string) => void
   onClose: () => void
   allowAuto?: boolean
+  codexCli?: boolean
 }
 
 type Mode = 'auto' | 'ratio' | 'resolution'
@@ -61,7 +64,7 @@ function findPresetForSize(size: string, tier: SizeTier) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, resolution, onSelect, onClose, allowAuto = true }: Props) {
+export default function SizePickerModal({ currentSize, resolution, onSelect, onClose, allowAuto = true, codexCli = false }: Props) {
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
@@ -115,6 +118,9 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
     if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current)
   }, [])
 
+  const normalizeSize = codexCli ? normalizeCodexCliImageSize : normalizeImageSize
+  const sizeLimitText = codexCli ? CODEX_CLI_SIZE_LIMIT_TEXT : SIZE_LIMIT_TEXT
+
   const activeRatio = ratio === 'custom' ? customRatio : ratio
   const parsedCustomRatio = parseRatio(customRatio)
   const customRatioValid = ratio !== 'custom' || Boolean(parsedCustomRatio)
@@ -129,20 +135,20 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
     
     if (mode === 'ratio') {
       const size = calculateImageSize(tier, activeRatio)
-      return size ? normalizeImageSize(size) : ''
+      return size ? normalizeSize(size) : ''
     }
     
     if (mode === 'resolution') {
       const w = parseInt(customW, 10)
       const h = parseInt(customH, 10)
       if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
-        return `${w}x${h}`
+        return codexCli ? normalizeSize(`${w}x${h}`) : `${w}x${h}`
       }
       return ''
     }
     
     return ''
-  }, [mode, tier, activeRatio, customW, customH])
+  }, [mode, tier, activeRatio, customW, customH, normalizeSize])
 
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
@@ -184,7 +190,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
   const buttonClass = (active: boolean) => {
     return `rounded-xl border px-3 py-2 text-sm transition ${active
       ? 'border-blue-400 bg-blue-50 text-blue-600 dark:border-blue-500/50 dark:bg-blue-500/10 dark:text-blue-300'
-      : 'border-gray-200/70 bg-white/60 text-gray-600 hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]'
+      : 'border-transparent bg-black/[0.04] text-gray-600 hover:bg-black/[0.07] dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
     }`
   }
 
@@ -309,7 +315,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
                       placeholder="例如 5:4 / 2.39:1"
                       className={`w-full rounded-xl border px-3 py-2 text-sm outline-none transition ${
                         customRatioValid
-                          ? 'border-gray-200/70 bg-white/60 text-gray-700 focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50'
+                          ? 'border-transparent bg-black/[0.04] text-gray-700 focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50'
                           : 'border-red-300 bg-white/60 text-gray-700 focus:border-red-400 dark:border-red-500/40 dark:bg-white/[0.03] dark:text-gray-200'
                       }`}
                     />
@@ -329,7 +335,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
                         type="number"
                         value={customW}
                         onChange={(e) => setCustomW(e.target.value)}
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                         placeholder="例如 1024"
                       />
                     </label>
@@ -344,18 +350,18 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
                         type="number"
                         value={customH}
                         onChange={(e) => setCustomH(e.target.value)}
-                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                        className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-blue-500/50"
                         placeholder="例如 1024"
                       />
                     </label>
                   </div>
                 </section>
-                <div className="rounded-xl border border-gray-200/80 bg-gray-50/80 p-3 text-xs text-gray-600 dark:border-white/[0.05] dark:bg-white/[0.02] dark:text-gray-400">
+                <div className="rounded-xl border border-transparent bg-black/[0.04] p-3 text-xs text-gray-600 dark:bg-white/[0.06] dark:text-gray-400">
                   <div className="flex items-start gap-2">
                     <svg className="mt-[2px] h-4 w-4 flex-shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <div className="whitespace-pre-line leading-relaxed">{SIZE_LIMIT_TEXT}</div>
+                    <div className="whitespace-pre-line leading-relaxed">{sizeLimitText}</div>
                   </div>
                 </div>
               </div>
@@ -382,7 +388,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   <ViewportTooltip visible={hintVisible} className="w-56 whitespace-pre-line text-center">
-                    {SIZE_LIMIT_TEXT}
+                    {CLAMPED_SIZE_TEXT}
                   </ViewportTooltip>
                 </div>
               )}

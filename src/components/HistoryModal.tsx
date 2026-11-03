@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
-import { getAgentConversationTaskIds, removeMultipleTasks, useStore } from '../store'
+import { removeMultipleTasks, useStore } from '../store'
 import type { AgentConversation } from '../types'
+import { getAgentConversationTaskIds, getConversationSearchText } from '../lib/agentConversationState'
 import { useTooltip } from '../hooks/useTooltip'
+import { useVisibleAgentConversations } from '../hooks/usePrivacyMode'
 import { CloseIcon, EditIcon, TrashIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -76,21 +78,13 @@ function formatDetailTime(value: number) {
   return formatter.format(date).replace(/\//g, '-')
 }
 
-function getConversationSearchText(conversation: AgentConversation) {
-  return [
-    conversation.title,
-    ...conversation.messages.map((message) => message.content),
-    ...conversation.rounds.map((round) => round.prompt),
-  ].join('\n').toLocaleLowerCase()
-}
-
 type HistoryModalProps = {
   onClose: () => void
   ignoreOutsideClickRef?: RefObject<HTMLElement | null>
 }
 
 export default function HistoryModal({ onClose, ignoreOutsideClickRef }: HistoryModalProps) {
-  const conversations = useStore((s) => s.agentConversations)
+  const conversations = useVisibleAgentConversations()
   const activeConversationId = useStore((s) => s.activeAgentConversationId)
   const setActiveConversationId = useStore((s) => s.setActiveAgentConversationId)
   const renameConversation = useStore((s) => s.renameAgentConversation)
