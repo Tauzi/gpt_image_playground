@@ -1750,6 +1750,7 @@ export default function InputBar() {
       agentAutoImageCount={agentAutoImageCount}
       outputImageLimit={outputImageLimit}
       nInput={nInput}
+      showImageCount={!isMianyunProvider}
       setNInputFocused={setNInputFocused}
       commitN={commitN}
       handleNInputChange={handleNInputChange}

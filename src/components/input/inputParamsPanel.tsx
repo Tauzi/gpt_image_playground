@@ -120,6 +120,7 @@ export default function InputParamsPanel({
   agentAutoImageCount,
   outputImageLimit,
   nInput,
+  showImageCount,
   setNInputFocused,
   commitN,
   handleNInputChange,
@@ -171,6 +172,7 @@ export default function InputParamsPanel({
   agentAutoImageCount: boolean
   outputImageLimit: number
   nInput: string
+  showImageCount: boolean
   setNInputFocused: (focused: boolean) => void
   commitN: () => void
   handleNInputChange: (value: string) => void
@@ -286,48 +288,50 @@ export default function InputParamsPanel({
           text={isFalProvider ? <>fal.ai 不支持 <code className="rounded bg-white/10 px-1 py-0.5 font-mono">auto</code> 质量参数</> : 'Codex CLI 不支持质量参数'}
         />
       </div>
-      <label
-        className={`relative flex items-center max-sm:flex-auto sm:shrink-0 ${agentAutoImageCount ? CHIP_DISABLED_CLASS : `${CHIP_CLASS} cursor-text`}`}
-        onMouseEnter={() => { showAgentNHint(); streamConcurrentHint.show() }}
-        onMouseLeave={() => { hideNLimitHint(); streamConcurrentHint.hide() }}
-        onTouchStart={() => { startAgentNHintTouch(); streamConcurrentHint.startTouch() }}
-        onTouchEnd={() => { clearAgentNHintTouchTimer(); streamConcurrentHint.clearTimer() }}
-        onTouchCancel={() => {
-          clearAgentNHintTouchTimer()
-          hideNLimitHint()
-          streamConcurrentHint.hide()
-        }}
-        onClick={() => { showAgentNHint(); streamConcurrentHint.show() }}
-      >
-        {prefix('数量')}
-        <input
-          value={nInput}
-          onChange={(e) => handleNInputChange(e.target.value)}
-          onFocus={() => setNInputFocused(true)}
-          onBlur={() => {
-            setNInputFocused(false)
-            commitN()
+      {showImageCount && (
+        <label
+          className={`relative flex items-center max-sm:flex-auto sm:shrink-0 ${agentAutoImageCount ? CHIP_DISABLED_CLASS : `${CHIP_CLASS} cursor-text`}`}
+          onMouseEnter={() => { showAgentNHint(); streamConcurrentHint.show() }}
+          onMouseLeave={() => { hideNLimitHint(); streamConcurrentHint.hide() }}
+          onTouchStart={() => { startAgentNHintTouch(); streamConcurrentHint.startTouch() }}
+          onTouchEnd={() => { clearAgentNHintTouchTimer(); streamConcurrentHint.clearTimer() }}
+          onTouchCancel={() => {
+            clearAgentNHintTouchTimer()
+            hideNLimitHint()
+            streamConcurrentHint.hide()
           }}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowUp') {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          onWheel={(e) => {
-            if (e.deltaY < 0) {
-              handleNLimitIncreaseAttempt(() => e.preventDefault())
-            }
-          }}
-          disabled={agentAutoImageCount}
-          type={agentAutoImageCount ? 'text' : 'number'}
-          min={agentAutoImageCount ? undefined : 1}
-          max={agentAutoImageCount ? undefined : outputImageLimit}
-          style={{ width: `${Math.max(1, nInput.length)}ch` }}
-          className="bg-transparent text-xs focus:outline-none disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        />
-        <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
-        <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
-      </label>
+          onClick={() => { showAgentNHint(); streamConcurrentHint.show() }}
+        >
+          {prefix('数量')}
+          <input
+            value={nInput}
+            onChange={(e) => handleNInputChange(e.target.value)}
+            onFocus={() => setNInputFocused(true)}
+            onBlur={() => {
+              setNInputFocused(false)
+              commitN()
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowUp') {
+                handleNLimitIncreaseAttempt(() => e.preventDefault())
+              }
+            }}
+            onWheel={(e) => {
+              if (e.deltaY < 0) {
+                handleNLimitIncreaseAttempt(() => e.preventDefault())
+              }
+            }}
+            disabled={agentAutoImageCount}
+            type={agentAutoImageCount ? 'text' : 'number'}
+            min={agentAutoImageCount ? undefined : 1}
+            max={agentAutoImageCount ? undefined : outputImageLimit}
+            style={{ width: `${Math.max(1, nInput.length)}ch` }}
+            className="bg-transparent text-xs focus:outline-none disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          />
+          <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
+          <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
+        </label>
+      )}
       <ParamPopoverChip label="更多" summary={moreSummary} className="sm:min-w-[5rem]">
             <div className={ROW_CLASS}>
               <span className={ROW_LABEL_CLASS}>格式</span>

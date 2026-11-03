@@ -1334,7 +1334,22 @@ export default function SettingsModal() {
                   </div>
                 </div>
                 <div>
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">API Key</span>
+                    <a
+                      href="https://mianyunai.com/keys"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1 text-xs text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      获取 API Key
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                        <path d="M15 3h6v6" />
+                        <path d="M10 14 21 3" />
+                      </svg>
+                    </a>
+                  </div>
                   <div className="relative">
                     <input
                       value={activeProfile.apiKey}

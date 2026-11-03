@@ -8,7 +8,7 @@ export type ImageResolution = '1K' | '2K' | '4K'
 /** 绵云可选的模型系列，实际模型 ID 由系列 + 同步/异步 + 分辨率拼出 */
 export const MIANYUN_MODEL_FAMILIES = ['gpt-image-2', 'gpt-image-2.5'] as const
 export type MianyunModelFamily = typeof MIANYUN_MODEL_FAMILIES[number]
-export const DEFAULT_MIANYUN_MODEL_FAMILY: MianyunModelFamily = 'gpt-image-2'
+export const DEFAULT_MIANYUN_MODEL_FAMILY: MianyunModelFamily = 'gpt-image-2.5'
 export type AppMode = 'gallery' | 'agent'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
