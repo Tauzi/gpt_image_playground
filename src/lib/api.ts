@@ -14,7 +14,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     ? { ...opts, params: { ...opts.params, size: getMianyunImageSize(opts.params.resolution, opts.params.size) } }
     : opts
   const profile = isMianyun
-    ? { ...activeProfile, model: getMianyunImageModel(opts.settings.imageModelFamily, opts.settings.imageGenerationMode, requestOpts.params.resolution) }
+    ? { ...activeProfile, model: getMianyunImageModel(opts.settings.imageModelFamily, opts.settings.imageGenerationMode, requestOpts.params.resolution, opts.settings.customImageModel) }
     : activeProfile
   if (profile.provider === 'fal') return callFalAiImageApi(requestOpts, profile)
 

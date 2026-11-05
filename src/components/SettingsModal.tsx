@@ -473,7 +473,7 @@ export default function SettingsModal() {
       id: newId('profile'),
       name: provider.name,
       provider: provider.id,
-      model: draft.imageModelFamily,
+      model: draft.customImageModel || draft.imageModelFamily,
       apiMode: 'images' as const,
       codexCli: false,
       apiProxy: false,
@@ -1310,8 +1310,8 @@ export default function SettingsModal() {
                   <span className="mb-2 block text-sm text-gray-600 dark:text-gray-300">生成方式</span>
                   <div className="grid grid-cols-2 gap-3">
                     {([
-                      { mode: 'async' as const, label: '异步', model: getMianyunImageModel(draft.imageModelFamily, 'async', params.resolution), available: Boolean(asyncImageProfile || asyncImageProvider) },
-                      { mode: 'sync' as const, label: '同步', model: getMianyunImageModel(draft.imageModelFamily, 'sync', params.resolution), available: Boolean(syncImageProfile || syncImageProvider) },
+                      { mode: 'async' as const, label: '异步', model: getMianyunImageModel(draft.imageModelFamily, 'async', params.resolution, draft.customImageModel), available: Boolean(asyncImageProfile || asyncImageProvider) },
+                      { mode: 'sync' as const, label: '同步', model: getMianyunImageModel(draft.imageModelFamily, 'sync', params.resolution, draft.customImageModel), available: Boolean(syncImageProfile || syncImageProvider) },
                     ]).map((option) => {
                       const selected = draft.imageGenerationMode === option.mode
                       return (
@@ -1384,7 +1384,7 @@ export default function SettingsModal() {
                   <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">同步和异步共用此 API Key。</div>
                 </div>
                 <div className="rounded-2xl border border-gray-100 bg-gray-50/80 p-4 text-[13px] leading-relaxed text-gray-500 dark:border-white/[0.05] dark:bg-white/[0.02] dark:text-gray-400">
-                  已自动使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{getMianyunImageModel(draft.imageModelFamily, draft.imageGenerationMode, params.resolution)}</code>，模型可在输入栏切换，服务商地址、密钥和接口配置保持不变。
+                  已自动使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{getMianyunImageModel(draft.imageModelFamily, draft.imageGenerationMode, params.resolution, draft.customImageModel)}</code>，模型可在输入栏切换，服务商地址、密钥和接口配置保持不变。
                 </div>
               </div>
             )}

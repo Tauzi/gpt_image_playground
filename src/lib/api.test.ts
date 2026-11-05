@@ -1904,6 +1904,65 @@ describe('callImageApi', () => {
     })
   })
 
+  it('sends a custom model name as-is even in 2K async mode', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'task-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'completed',
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        imageGenerationMode: 'async',
+        customImageModel: 'my-image-model',
+        customProviders: [{
+          id: 'custom-gpt-image-2-async',
+          name: '绵云异步',
+          submit: {
+            path: 'images/generations',
+            body: { stream: false },
+            taskIdPath: 'id',
+          },
+          poll: {
+            path: 'images/generations/{task_id}',
+            statusPath: 'status',
+            successValues: ['completed'],
+            failureValues: ['failed'],
+            result: { b64JsonPaths: ['data.*.b64_json'] },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'mianyun-async',
+          provider: 'custom-gpt-image-2-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+        }],
+        activeProfileId: 'mianyun-async',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS, resolution: '2K', size: '3:2' },
+      inputImageDataUrls: [],
+    })).resolves.toEqual({ images: ['data:image/png;base64,aW1hZ2U='] })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      model: 'my-image-model',
+      prompt: 'prompt',
+      async: true,
+      size: '2064x1376',
+      quality: 'auto',
+      n: 1,
+    })
+  })
+
   it('records in_progress status and progress before the async task completes', async () => {
     vi.useFakeTimers()
     const onCustomTaskUpdate = vi.fn()

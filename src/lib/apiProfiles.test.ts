@@ -1317,6 +1317,23 @@ describe('custom providers', () => {
     expect(getMianyunImageModel('gpt-image-2.6', 'async', '4K')).toBe('gpt-image-2.6-4k-async')
   })
 
+  it('sends a custom model name verbatim, ignoring mode and resolution suffixes', () => {
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '2K', 'my-image-model')).toBe('my-image-model')
+    expect(getMianyunImageModel('gpt-image-2.6', 'sync', '4K', '  my-image-model  ')).toBe('my-image-model')
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '2K', '')).toBe('gpt-image-2.6-2k-async')
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '2K', null)).toBe('gpt-image-2.6-2k-async')
+  })
+
+  it('keeps a custom model name in settings and the active profile', () => {
+    const settings = normalizeSettings({ ...ensureMianyunSettings({}), customImageModel: 'my-image-model' })
+    expect(settings.customImageModel).toBe('my-image-model')
+    expect(getActiveApiProfile(settings).model).toBe('my-image-model')
+
+    const cleared = normalizeSettings({ ...settings, customImageModel: null })
+    expect(cleared.customImageModel).toBeNull()
+    expect(getActiveApiProfile(cleared).model).toBe(cleared.imageModelFamily)
+  })
+
   it('upgrades the configured Mianyun provider fields to the documented contract', () => {
     const provider = normalizeCustomProviderDefinition({
       id: 'custom-gpt-image-2-async',

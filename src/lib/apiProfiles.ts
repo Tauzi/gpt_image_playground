@@ -59,6 +59,14 @@ export function normalizeMianyunModelFamily(value: unknown): MianyunModelFamily 
     : DEFAULT_MIANYUN_MODEL_FAMILY
 }
 
+/** 模型下拉里「自定义」选项的值，不对应任何真实模型 */
+export const CUSTOM_IMAGE_MODEL_OPTION = 'custom'
+
+/** 返回 null 表示未启用自定义模型；字符串（含空串）表示启用，空串时回落到按系列推导 */
+export function normalizeCustomImageModel(value: unknown) {
+  return typeof value === 'string' ? value.slice(0, 200) : null
+}
+
 const MIANYUN_DEFAULT_PROVIDERS: CustomProviderDefinition[] = [
   {
     id: MIANYUN_SYNC_PROVIDER_ID,
@@ -113,8 +121,11 @@ export function isMianyunImageProvider(provider: ApiProvider) {
 /**
  * 绵云的模型 ID 命名规则：同步不带 -async，异步带 -async；2K/4K 再拼分辨率后缀。
  * 4K 目前只有异步模型，同步模式沿用 4K 异步模型。
+ * 填了自定义模型名时原样使用，不再拼后缀。
  */
-export function getMianyunImageModel(family: MianyunModelFamily, mode: ImageGenerationMode, resolution: ImageResolution) {
+export function getMianyunImageModel(family: MianyunModelFamily, mode: ImageGenerationMode, resolution: ImageResolution, customModel?: string | null) {
+  const custom = customModel?.trim()
+  if (custom) return custom
   if (resolution === '4K') return `${family}-4k-async`
   if (resolution === '2K') return mode === 'sync' ? `${family}-2k` : `${family}-2k-async`
   return mode === 'async' ? `${family}-async` : family
@@ -825,6 +836,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     : [legacyProfile]
   const imageGenerationMode: ImageGenerationMode = record.imageGenerationMode === 'sync' ? 'sync' : 'async'
   const imageModelFamily = normalizeMianyunModelFamily(record.imageModelFamily)
+  const customImageModel = normalizeCustomImageModel(record.customImageModel)
   const storedActiveProfileId = typeof record.activeProfileId === 'string' && normalizedProfiles.some((p) => p.id === record.activeProfileId)
     ? record.activeProfileId
     : normalizedProfiles[0].id
@@ -840,11 +852,11 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     : undefined)
   const activeProfileId = modeProfile?.id ?? storedActiveProfileId
   const defaultProfileId = getDefaultApiProfileId({ profiles: normalizedProfiles })
-  // 绵云 profile 的 model 直接保存模型系列，实际模型 ID 在提交时按系列 + 同步/异步 + 分辨率推导
+  // 绵云 profile 的 model 保存当前实际模型名，自定义模型名优先，否则用模型系列
   const profiles = normalizedProfiles.map((profile) => ({
     ...profile,
     isDefault: profile.id === defaultProfileId ? true : undefined,
-    model: isMianyunImageProvider(profile.provider) ? imageModelFamily : profile.model,
+    model: isMianyunImageProvider(profile.provider) ? customImageModel || imageModelFamily : profile.model,
   }))
   const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]
   const agentApiConfigMode = normalizeAgentApiConfigMode(record.agentApiConfigMode)
@@ -868,6 +880,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     streamPartialImages: active.streamPartialImages,
     imageGenerationMode,
     imageModelFamily,
+    customImageModel,
     customProviders,
     providerOrder: normalizeProviderOrder(record.providerOrder, customProviders),
     clearInputAfterSubmit: typeof record.clearInputAfterSubmit === 'boolean' ? record.clearInputAfterSubmit : false,
@@ -1463,6 +1476,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   streamPartialImages: DEFAULT_API_URL_PATCH?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
   imageGenerationMode: 'async',
   imageModelFamily: DEFAULT_MIANYUN_MODEL_FAMILY,
+  customImageModel: null,
   customProviders: [],
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
@@ -1519,7 +1533,7 @@ export function ensureMianyunSettings(input: Partial<AppSettings> | unknown): Ap
       provider: providerId,
       baseUrl: MIANYUN_BASE_URL,
       apiKey: sharedApiKey,
-      model: current.imageModelFamily,
+      model: current.customImageModel || current.imageModelFamily,
       apiMode: 'images',
       codexCli: false,
       apiProxy: false,

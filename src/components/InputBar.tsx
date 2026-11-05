@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, stopAgentResponse, stopBatchPrompts, addImageFromFile, removeMultipleTasks, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type ImageResolution, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
-import { getActiveApiProfile, getAgentImageApiProfile, normalizeMianyunModelFamily, isMianyunImageProvider, MIANYUN_ASYNC_PROVIDER_ID, MIANYUN_MODEL_FAMILIES, MIANYUN_SYNC_PROVIDER_ID, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
+import { CUSTOM_IMAGE_MODEL_OPTION, getActiveApiProfile, getAgentImageApiProfile, getMianyunImageModel, normalizeMianyunModelFamily, isMianyunImageProvider, MIANYUN_ASYNC_PROVIDER_ID, MIANYUN_MODEL_FAMILIES, MIANYUN_SYNC_PROVIDER_ID, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
 import { getImageGenerationModel, supportsMaxQuality } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { splitBatchPrompts } from '../lib/batchPrompts'
@@ -447,16 +447,28 @@ export default function InputBar() {
   }, [appMode, currentActiveProfile, reusedTaskApiModel, reusedTaskApiProfileId, settings])
   const isTemporarilyReusedProfile = activeProfile.id !== currentActiveProfile.id
   const isMianyunProvider = isMianyunImageProvider(activeProfile.provider)
+  // customImageModel 为 null 表示按系列推导；字符串（可能为空）表示用户选了「自定义模型」
+  const isCustomImageModel = isMianyunProvider && settings.customImageModel !== null
+  const customImageModel = isCustomImageModel ? settings.customImageModel ?? '' : ''
   const modelOptions = useMemo(() => (
-    // 绵云的模型 ID 由系列 + 同步/异步 + 分辨率推导，下拉里只列可选系列
+    // 绵云的模型 ID 由系列 + 同步/异步 + 分辨率推导，下拉里只列可选系列，外加自定义模型入口
     isMianyunProvider
-      ? MIANYUN_MODEL_FAMILIES.map((family) => ({ label: family, value: family }))
+      ? [
+          ...MIANYUN_MODEL_FAMILIES.map((family) => ({ label: family, value: family })),
+          { label: '自定义模型…', value: CUSTOM_IMAGE_MODEL_OPTION },
+        ]
       : splitModelList(settings.profiles.find((profile) => profile.id === activeProfile.id)?.model ?? activeProfile.model)
         .map((model) => ({ label: model, value: model }))
   ), [activeProfile.id, activeProfile.model, isMianyunProvider, settings.profiles])
+  const modelSelectValue = isCustomImageModel ? CUSTOM_IMAGE_MODEL_OPTION : activeProfile.model
   const handleModelChange = useCallback((model: string) => {
     if (isMianyunProvider) {
-      setSettings({ imageModelFamily: normalizeMianyunModelFamily(model) })
+      // 切到自定义时用当前实际模型名作为起点；自定义名清空后自动回落到按系列推导
+      if (model === CUSTOM_IMAGE_MODEL_OPTION) {
+        setSettings({ customImageModel: getMianyunImageModel(settings.imageModelFamily, settings.imageGenerationMode, params.resolution) })
+        return
+      }
+      setSettings({ imageModelFamily: normalizeMianyunModelFamily(model), customImageModel: '' })
       return
     }
     // 临时复用其他配置时只切换本次复用的模型，不改动该配置记住的选择
@@ -467,7 +479,7 @@ export default function InputBar() {
     setSettings({
       profiles: settings.profiles.map((profile) => profile.id === activeProfile.id ? { ...profile, selectedModel: model } : profile),
     })
-  }, [activeProfile.id, isMianyunProvider, isTemporarilyReusedProfile, setReusedTaskApiModel, setSettings, settings.profiles])
+  }, [activeProfile.id, isMianyunProvider, isTemporarilyReusedProfile, params.resolution, setReusedTaskApiModel, setSettings, settings.imageGenerationMode, settings.imageModelFamily, settings.profiles])
   const activeAgentConversation = appMode === 'agent'
     ? agentConversations.find((conversation) => conversation.id === activeAgentConversationId) ?? null
     : null
@@ -1728,7 +1740,11 @@ export default function InputBar() {
       setParams={setParams}
       activeProfile={activeProfile}
       modelOptions={modelOptions}
+      modelSelectValue={modelSelectValue}
       onModelChange={handleModelChange}
+      isCustomImageModel={isCustomImageModel}
+      customImageModel={customImageModel}
+      onCustomImageModelChange={(value: string) => setSettings({ customImageModel: value })}
       isFalProvider={isFalProvider}
       isFalTextToImage={isFalTextToImage}
       displaySize={displaySize}

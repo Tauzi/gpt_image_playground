@@ -98,7 +98,11 @@ export default function InputParamsPanel({
   setParams,
   activeProfile,
   modelOptions,
+  modelSelectValue,
   onModelChange,
+  isCustomImageModel,
+  customImageModel,
+  onCustomImageModelChange,
   isFalProvider,
   isFalTextToImage,
   displaySize,
@@ -150,7 +154,11 @@ export default function InputParamsPanel({
   setParams: (patch: Partial<TaskParams>) => void
   activeProfile: ApiProfile
   modelOptions: Array<{ label: string; value: string }>
+  modelSelectValue: string
   onModelChange: (model: string) => void
+  isCustomImageModel: boolean
+  customImageModel: string
+  onCustomImageModelChange: (model: string) => void
   isFalProvider: boolean
   isFalTextToImage: boolean
   displaySize: string
@@ -217,7 +225,7 @@ export default function InputParamsPanel({
       {/* 极小的收缩权重：先截断“更多”的摘要，放不下时才压缩模型 ID */}
       <div className="min-w-0 max-w-full sm:shrink-[0.01] max-sm:flex-auto">
         <Select
-          value={activeProfile.model}
+          value={modelSelectValue}
           onChange={(val) => onModelChange(String(val))}
           options={modelOptions}
           showValueTooltips
@@ -225,6 +233,18 @@ export default function InputParamsPanel({
           className={CHIP_CLASS}
         />
       </div>
+      {isCustomImageModel && (
+        <div className="min-w-0 max-sm:flex-auto sm:w-48 sm:shrink">
+          <input
+            value={customImageModel}
+            onChange={(e) => onCustomImageModelChange(e.target.value)}
+            placeholder="输入模型名（留空自动推导）"
+            spellCheck={false}
+            aria-label="自定义模型名"
+            className={`${CHIP_CLASS} w-full min-w-0 font-mono placeholder:text-gray-400 dark:placeholder:text-gray-500`}
+          />
+        </div>
+      )}
       <div
         className="relative max-sm:flex-auto sm:shrink-0"
         onMouseEnter={sizeHint.show}

@@ -1819,7 +1819,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const normalizedSettings = normalizeSettings(settings)
   let activeProfile = getActiveApiProfile(settings)
   if (isMianyunImageProvider(activeProfile.provider)) {
-    activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution) }
+    activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution, normalizedSettings.customImageModel) }
   }
   let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
@@ -1842,7 +1842,7 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     } else {
       activeProfile = reusedProfile
       if (isMianyunImageProvider(activeProfile.provider)) {
-        activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution) }
+        activeProfile = { ...activeProfile, model: getMianyunImageModel(normalizedSettings.imageModelFamily, normalizedSettings.imageGenerationMode, params.resolution, normalizedSettings.customImageModel) }
       }
       requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
     }

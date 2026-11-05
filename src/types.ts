@@ -158,6 +158,8 @@ export interface AppSettings {
   imageGenerationMode: ImageGenerationMode
   /** 绵云模型系列，如 gpt-image-2 / gpt-image-2.5 */
   imageModelFamily: MianyunModelFamily
+  /** 自定义模型名：null 表示不启用，非 null 时原样作为模型 ID 发送，不再按系列 + 同步/异步 + 分辨率推导 */
+  customImageModel: string | null
   customProviders: CustomProviderDefinition[]
   providerOrder?: string[]
   clearInputAfterSubmit: boolean
