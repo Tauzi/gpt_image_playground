@@ -1310,6 +1310,11 @@ describe('custom providers', () => {
     expect(getMianyunImageModel('gpt-image-2.5', 'async', '2K')).toBe('gpt-image-2.5-2k-async')
     expect(getMianyunImageModel('gpt-image-2.5', 'sync', '2K')).toBe('gpt-image-2.5-2k')
     expect(getMianyunImageModel('gpt-image-2.5', 'async', '4K')).toBe('gpt-image-2.5-4k-async')
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '1K')).toBe('gpt-image-2.6-async')
+    expect(getMianyunImageModel('gpt-image-2.6', 'sync', '1K')).toBe('gpt-image-2.6')
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '2K')).toBe('gpt-image-2.6-2k-async')
+    expect(getMianyunImageModel('gpt-image-2.6', 'sync', '2K')).toBe('gpt-image-2.6-2k')
+    expect(getMianyunImageModel('gpt-image-2.6', 'async', '4K')).toBe('gpt-image-2.6-4k-async')
   })
 
   it('upgrades the configured Mianyun provider fields to the documented contract', () => {

@@ -156,6 +156,13 @@ describe('persisted state codec', () => {
     expect(migratePersistedState('invalid', 1)).toBe('invalid')
   })
 
+  it('migrates the stored gpt-image-2.5 model family to the new default once', () => {
+    const legacy = { settings: { imageModelFamily: 'gpt-image-2.5' } }
+    expect((migratePersistedState(legacy, 2) as { settings: { imageModelFamily: string } }).settings.imageModelFamily).toBe('gpt-image-2.6')
+    // 已经是新版本的数据保持用户手动选择
+    expect((migratePersistedState(legacy, 3) as { settings: { imageModelFamily: string } }).settings.imageModelFamily).toBe('gpt-image-2.5')
+  })
+
   it('normalizes legacy conversations, active ID, and top-level Agent draft fallback', () => {
     const result = normalizePersistedState({
       settings: DEFAULT_SETTINGS,

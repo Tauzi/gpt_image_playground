@@ -1,6 +1,6 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
 import { getActiveApiProfile, isMianyunImageProvider, isOpenAICompatibleProvider } from './apiProfiles'
-import { getImageGenerationModel, isGptImage25Model } from './imageModels'
+import { getImageGenerationModel, supportsMaxQuality } from './imageModels'
 import { calculateImageSize, normalizeCodexCliImageSize, normalizeImageSize, parseRatio } from './size'
 
 export const DEFAULT_FAL_IMAGE_SIZE = '1360x1024'
@@ -73,7 +73,7 @@ export function normalizeParamsForSettings(
     nextParams.output_compression = DEFAULT_PARAMS.output_compression
   }
 
-  if ((nextParams.quality === 'xhigh' || nextParams.quality === 'max') && !isGptImage25Model(getImageGenerationModel(activeProfile))) {
+  if ((nextParams.quality === 'xhigh' || nextParams.quality === 'max') && !supportsMaxQuality(getImageGenerationModel(activeProfile))) {
     nextParams.quality = 'high'
   }
 

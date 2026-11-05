@@ -1,4 +1,4 @@
-import type { AgentConversation, AgentInputDraft, AppMode, AppSettings, FavoriteCollection, InputImage, MaskDraft, PresetConfig, TaskParams } from '../types'
+import { DEFAULT_MIANYUN_MODEL_FAMILY, type AgentConversation, type AgentInputDraft, type AppMode, type AppSettings, type FavoriteCollection, type InputImage, type MaskDraft, type PresetConfig, type TaskParams } from '../types'
 import { ensureMianyunSettings, normalizePresetAgent, normalizeSettings } from './apiProfiles'
 import { normalizeAgentConversations } from './agentConversationState'
 import { ensureDefaultFavoriteCollection, normalizeFavoriteCollections, resolveDefaultFavoriteCollectionId } from './favoriteState'
@@ -129,10 +129,16 @@ export function createPersistedState(state: PersistedStateSource, includeLegacyA
   }
 }
 
-export function migratePersistedState(persistedState: unknown, _version?: number): unknown {
+export function migratePersistedState(persistedState: unknown, version?: number): unknown {
   if (!isRecord(persistedState)) return persistedState
+  // v3：默认模型系列升到 gpt-image-2.6，把旧版本记住的 2.5 一次性迁到新默认，之后用户手动选择不再被覆盖
+  const settings = version !== undefined && version < 3 && isRecord(persistedState.settings)
+    && persistedState.settings.imageModelFamily === 'gpt-image-2.5'
+    ? { ...persistedState.settings, imageModelFamily: DEFAULT_MIANYUN_MODEL_FAMILY }
+    : persistedState.settings
   return {
     ...persistedState,
+    settings,
     agentConversations: stripPersistedAgentConversations(persistedState.agentConversations),
   }
 }

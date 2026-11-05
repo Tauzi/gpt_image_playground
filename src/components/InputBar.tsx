@@ -4,7 +4,7 @@ import { deleteFavoriteCollection, useStore, submitTask, submitAgentMessage, sto
 import { DEFAULT_PARAMS, MAX_INPUT_IMAGES, type ImageResolution, type TaskRecord } from '../types'
 import { getActiveAgentRounds } from '../lib/agentConversationState'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeMianyunModelFamily, isMianyunImageProvider, MIANYUN_ASYNC_PROVIDER_ID, MIANYUN_MODEL_FAMILIES, MIANYUN_SYNC_PROVIDER_ID, normalizeSettings, resolveApiProfileModel, splitModelList } from '../lib/apiProfiles'
-import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
+import { getImageGenerationModel, supportsMaxQuality } from '../lib/imageModels'
 import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { splitBatchPrompts } from '../lib/batchPrompts'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
@@ -548,7 +548,7 @@ export default function InputBar() {
     { label: 'low', value: 'low' },
     { label: 'medium', value: 'medium' },
     { label: 'high', value: 'high' },
-    ...(isGptImage25Model(getImageGenerationModel(activeProfile))
+    ...(supportsMaxQuality(getImageGenerationModel(activeProfile))
       ? [
           { label: 'xhigh', value: 'xhigh' },
           { label: 'max', value: 'max' },

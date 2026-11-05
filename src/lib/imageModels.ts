@@ -8,6 +8,8 @@ export function getImageGenerationModel(profile: ApiProfile) {
     : profile.model
 }
 
-export function isGptImage25Model(model: string) {
-  return model.trim().toLowerCase().includes('gpt-image-2.5')
+/** 支持 xhigh / max 质量档位的模型（gpt-image-2.5 及之后的版本） */
+export function supportsMaxQuality(model: string) {
+  const normalized = model.trim().toLowerCase()
+  return normalized.includes('gpt-image-2.5') || normalized.includes('gpt-image-2.6')
 }

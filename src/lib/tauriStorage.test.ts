@@ -203,7 +203,7 @@ describe('tauriStorage', () => {
     const write = invoke.mock.calls.find(([cmd]) => cmd === 'kv_set')
     expect(write?.[1].key).toBe('gpt-image-playground')
     const saved = JSON.parse(write?.[1].value)
-    expect(saved.version).toBe(2)
+    expect(saved.version).toBe(3)
     expect(saved.state.agentSidebarCollapsed).toBe(false)
     expect(saved.state.supportPromptDismissed).toBe(true)
   })

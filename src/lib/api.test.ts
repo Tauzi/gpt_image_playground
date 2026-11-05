@@ -1895,7 +1895,7 @@ describe('callImageApi', () => {
     })).resolves.toEqual({ images: ['data:image/png;base64,aW1hZ2U='] })
 
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
-      model: 'gpt-image-2.5-2k-async',
+      model: 'gpt-image-2.6-2k-async',
       prompt: 'prompt',
       async: true,
       size: '2064x1376',
