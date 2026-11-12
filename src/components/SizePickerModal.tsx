@@ -42,7 +42,8 @@ interface Props {
   resolution: SizeTier
   onSelect: (size: string) => void
   onClose: () => void
-  allowAuto?: boolean
+  /** 不能使用自动尺寸的原因；设置后“自动”置灰 */
+  autoDisabledReason?: string
   codexCli?: boolean
 }
 
@@ -64,7 +65,7 @@ function findPresetForSize(size: string, tier: SizeTier) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, resolution, onSelect, onClose, allowAuto = true, codexCli = false }: Props) {
+export default function SizePickerModal({ currentSize, resolution, onSelect, onClose, autoDisabledReason, codexCli = false }: Props) {
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
@@ -96,7 +97,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
   const currentParsedSize = parseSize(currentSize)
   const currentRatio = currentSize.includes(':') ? parseRatio(currentSize) : null
   const [mode, setMode] = useState<Mode>(() => {
-    if (!currentSize || currentSize === 'auto') return allowAuto ? 'auto' : 'ratio'
+    if (!currentSize || currentSize === 'auto') return autoDisabledReason ? 'ratio' : 'auto'
     if (currentPreset) return 'ratio'
     if (currentRatio) return 'ratio'
     return 'resolution'
@@ -104,7 +105,7 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
 
   // Ratio mode state
   const currentRatioValue = currentRatio ? `${currentRatio.width}:${currentRatio.height}` : null
-  const [ratio, setRatio] = useState(ratioOptions.some((item) => item.value === currentRatioValue) ? currentRatioValue! : currentRatio ? 'custom' : currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+  const [ratio, setRatio] = useState(ratioOptions.some((item) => item.value === currentRatioValue) ? currentRatioValue! : currentRatio ? 'custom' : currentPreset?.ratio ?? (autoDisabledReason ? '4:3' : '1:1'))
   const [customRatio, setCustomRatio] = useState(currentRatioValue ?? '16:9')
 
   // Resolution mode state
@@ -113,6 +114,8 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
 
   const [hintVisible, setHintVisible] = useState(false)
   const hintTimerRef = useRef<number | null>(null)
+  // 当前显示原因的置灰按钮
+  const [disabledHint, setDisabledHint] = useState<string | null>(null)
 
   useEffect(() => () => {
     if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current)
@@ -181,6 +184,17 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
     }, 450)
   }
 
+  // 置灰按钮不响应鼠标和点击事件，由外层容器在悬停或轻点时显示原因，移开或点别处时关闭
+  const disabledHintHandlers = (key: string, disabled: boolean) => ({
+    onMouseEnter: () => {
+      if (disabled) setDisabledHint(key)
+    },
+    onMouseLeave: () => setDisabledHint(null),
+    onTouchEnd: () => {
+      if (disabled) setDisabledHint(key)
+    },
+  })
+
   const applySize = () => {
     if (!previewSize) return
     onSelect(previewSize)
@@ -224,14 +238,18 @@ export default function SizePickerModal({ currentSize, resolution, onSelect, onC
 
         <div className="space-y-6">
           <div className="flex rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
-            {allowAuto && (
+            <div className="relative flex flex-1" {...disabledHintHandlers('auto', Boolean(autoDisabledReason))}>
               <button
                 onClick={() => setMode('auto')}
-                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'auto' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                disabled={Boolean(autoDisabledReason)}
+                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${mode === 'auto' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
               >
                 自动
               </button>
-            )}
+              <ViewportTooltip visible={disabledHint === 'auto'} className="w-52 text-center">
+                {autoDisabledReason}
+              </ViewportTooltip>
+            </div>
             <button
               onClick={() => setMode('ratio')}
               className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'ratio' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
