@@ -468,7 +468,7 @@ export default function InputBar() {
         setSettings({ customImageModel: getMianyunImageModel(settings.imageModelFamily, settings.imageGenerationMode, params.resolution) })
         return
       }
-      setSettings({ imageModelFamily: normalizeMianyunModelFamily(model), customImageModel: '' })
+      setSettings({ imageModelFamily: normalizeMianyunModelFamily(model), customImageModel: null })
       return
     }
     // 临时复用其他配置时只切换本次复用的模型，不改动该配置记住的选择
